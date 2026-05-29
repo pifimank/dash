@@ -1,0 +1,46 @@
+{
+  "enable_system_metrics": true,
+  "enable_service_control": true,
+  "buttons": {
+    "update_db": {
+      "visible": true,
+      "enabled": true,
+      "label": "Обновить базы"
+    },
+    "traffic_capture": {
+      "visible": true,
+      "enabled": true,
+      "label": "Захват пакетов"
+    },
+    "packet_analysis": {
+      "visible": true,
+      "enabled": true,
+      "label": "Анализ пакетов"
+    },
+    "dns_analysis": {
+      "visible": true,
+      "enabled": true,
+      "label": "Анализ ДНС"
+    },
+    "ip_addresses": {
+      "visible": true,
+      "enabled": true,
+      "label": "IP адреса"
+    },
+    "dns_records": {
+      "visible": true,
+      "enabled": true,
+      "label": "ДНС"
+    },
+    "download_logs": {
+      "visible": true,
+      "enabled": true,
+      "label": "Скачать логи"
+    },
+    "ya_sleep": {
+      "visible": true,
+      "enabled": true,
+      "label": "Ya_спать"
+    }
+  }
+}

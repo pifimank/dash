@@ -1,0 +1,6 @@
+{
+  "name": "Ubuntu System Dashboard",
+  "description": "A responsive system administration dashboard for Linux Ubuntu that displays hardware metrics and controls local network services via Python scripts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,15 @@
+{
+  "ip2location_url": "https://www.ip2location.com/download?token=EScQtt2L2hVy4ya8vnFvaWh8ixG4gnORKLaefL9Gz9x9RlGVTV265eSK6pc1M00V&file=DBASNLITEBINIPV6",
+  "ip2location_dir": "/home/rpaltaev/IP2LOCATION",
+  "ip2location_zip": "DB11LITEBINIPV6.BIN.ZIP",
+  
+  "example_url": "https://www.example.com/download?token=EScQtt2L2hVy4ya8vnFvaWh8ixG4gnORKLaefL9Gz9x9RlGVTV265eSK6pc1M00V&file=DBASNLITEBINIPV6",
+  "example_zip": "ip-to-asn.mmdb.ZIP",
+  
+  "tmp_dir": "/tmp",
+  "as_report_script": "/usr/local/bin/as_report.sh",
+  "dns_report_script": "/usr/local/bin/getdns.sh",
+  
+  "ip2loc_report_csv": "/tmp/ip2loc_report.csv",
+  "dns_report_csv": "/tmp/dns_report.csv"
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Ubuntu System Dashboard Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rpaltaev/dashboard
+ExecStart=/usr/bin/python3 python_app/server.py
+Restart=always
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
