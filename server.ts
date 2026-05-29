@@ -65,6 +65,8 @@ async function startServer() {
   // Initialize service active status and db simulated status
   let trafficCaptureActive = false;
   let dbSimulatedError = false;
+  let packetAnalysisActive = false;
+  let dnsAnalysisActive = false;
   const killedPids = new Set<string>();
 
   // Read settings from python_app
@@ -137,7 +139,12 @@ async function startServer() {
         { pid: "987", cpu: "0.6", mem: "0.4", name: "sshd" },
         { pid: "1054", cpu: "0.4", mem: "0.3", name: "rsyslogd" },
         { pid: "24412", cpu: "0.2", mem: "0.5", name: "bash" }
-      ].filter(p => !killedPids.has(p.pid)),
+      ].filter(p => !killedPids.has(p.pid) && p.name !== "ps"),
+      running_actions: {
+        packet_analysis: packetAnalysisActive,
+        dns_analysis: dnsAnalysisActive,
+        update_db: false
+      },
       traffic_capture_active: trafficCaptureActive,
       ip_report_exists: ipReportExists,
       dns_report_exists: dnsReportExists,
@@ -221,20 +228,34 @@ async function startServer() {
   };
 
   app.post("/api/actions/packet-analysis", async (req, res) => {
-    const result = await runShellScript("/usr/local/bin/as_report.sh");
-    if (result.success) {
-      res.json({ success: true, message: "Анализ пакетов успешно завершен." });
+    if (fs.existsSync("/usr/local/bin/as_report.sh")) {
+      packetAnalysisActive = true;
+      res.json({ success: true, message: "Анализ пакетов запущен в фоновом режиме." });
+      exec("/usr/local/bin/as_report.sh", (error) => {
+        packetAnalysisActive = false;
+      });
     } else {
-      res.status(500).json({ success: false, error: result.error || "Ошибка при анализе пакетов" });
+      packetAnalysisActive = true;
+      res.json({ success: true, message: "Анализ пакетов запущен в фоновом режиме." });
+      setTimeout(() => {
+        packetAnalysisActive = false;
+      }, 12000);
     }
   });
 
   app.post("/api/actions/dns-analysis", async (req, res) => {
-    const result = await runShellScript("/usr/local/bin/getdns.sh");
-    if (result.success) {
-      res.json({ success: true, message: "Анализ ДНС успешно завершен." });
+    if (fs.existsSync("/usr/local/bin/getdns.sh")) {
+      dnsAnalysisActive = true;
+      res.json({ success: true, message: "Анализ ДНС запущен в фоновом режиме." });
+      exec("/usr/local/bin/getdns.sh", (error) => {
+        dnsAnalysisActive = false;
+      });
     } else {
-      res.status(500).json({ success: false, error: result.error || "Ошибка при анализе ДНС" });
+      dnsAnalysisActive = true;
+      res.json({ success: true, message: "Анализ ДНС запущен в фоновом режиме." });
+      setTimeout(() => {
+        dnsAnalysisActive = false;
+      }, 15000);
     }
   });
 

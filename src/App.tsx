@@ -219,7 +219,12 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
 
-  const isAnyActionRunning = Object.values(runningActions).some((val) => val);
+  const isActionRunning = (key: string) => {
+    return !!(runningActions[key] || metrics?.running_actions?.[key]);
+  };
+
+  const isAnyActionRunning = Object.keys(runningActions).some((key) => runningActions[key]) || 
+                             (metrics?.running_actions ? Object.values(metrics.running_actions).some((val) => val) : false);
 
   const formatUptime = (raw: string | undefined): string => {
     if (!raw) return "Опрос...";
@@ -742,7 +747,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-sky-100">
-                        {metrics.top_processes.map((proc, idx) => {
+                        {metrics.top_processes.filter((proc) => proc.name !== "ps" && proc.name !== "[ps]" && proc.name !== "ps ").map((proc, idx) => {
                           const isKilled = localKilledPids.has(proc.pid);
                           return (
                             <tr 
@@ -817,11 +822,11 @@ export default function App() {
             {/* --- 2.1 UPDATE BASE BUTTON --- */}
             {displaySettings?.buttons?.update_db?.visible !== false && (
               <button
-                disabled={runningActions["update_db"] || displaySettings?.buttons?.update_db?.enabled === false}
+                disabled={isActionRunning("update_db") || displaySettings?.buttons?.update_db?.enabled === false}
                 onClick={handleUpdateDB}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
                   ${
-                    runningActions["update_db"]
+                    isActionRunning("update_db")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg"
                       : displaySettings?.buttons?.update_db?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
@@ -831,9 +836,9 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Database className={`w-4 h-4 ${runningActions["update_db"] ? "text-white" : "text-blue-550"}`} />
+                    <Database className={`w-4 h-4 ${isActionRunning("update_db") ? "text-white" : "text-blue-550"}`} />
                   </span>
-                  {runningActions["update_db"] && (
+                  {isActionRunning("update_db") && (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
                   )}
                 </div>
@@ -849,11 +854,11 @@ export default function App() {
             {/* --- 2.2 PACKET CAPTURE BUTTON --- */}
             {displaySettings?.buttons?.traffic_capture?.visible !== false && (
               <button
-                disabled={runningActions["traffic_capture"] || displaySettings?.buttons?.traffic_capture?.enabled === false}
+                disabled={isActionRunning("traffic_capture") || displaySettings?.buttons?.traffic_capture?.enabled === false}
                 onClick={handleTrafficCapture}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
                   ${
-                    runningActions["traffic_capture"]
+                    isActionRunning("traffic_capture")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg"
                       : metrics?.traffic_capture_active
                       ? "bg-emerald-50 border-emerald-350 text-emerald-800 font-bold"
@@ -865,12 +870,12 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Network className={`w-4 h-4 ${runningActions["traffic_capture"] ? "text-white" : metrics?.traffic_capture_active ? "text-emerald-600 animate-pulse" : "text-emerald-500"}`} />
+                    <Network className={`w-4 h-4 ${isActionRunning("traffic_capture") ? "text-white" : metrics?.traffic_capture_active ? "text-emerald-600 animate-pulse" : "text-emerald-500"}`} />
                   </span>
-                  {runningActions["traffic_capture"] ? (
+                  {isActionRunning("traffic_capture") ? (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
                   ) : metrics?.traffic_capture_active ? (
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping mt-1.5" />
+                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping mt-1.5" />
                   ) : null}
                 </div>
                 <div>
@@ -885,11 +890,11 @@ export default function App() {
             {/* --- 2.3 PACKET ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.packet_analysis?.visible !== false && (
               <button
-                disabled={runningActions["packet_analysis"] || displaySettings?.buttons?.packet_analysis?.enabled === false}
+                disabled={isActionRunning("packet_analysis") || displaySettings?.buttons?.packet_analysis?.enabled === false}
                 onClick={handlePacketAnalysis}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
                   ${
-                    runningActions["packet_analysis"]
+                    isActionRunning("packet_analysis")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg"
                       : displaySettings?.buttons?.packet_analysis?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
@@ -899,9 +904,9 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <FileText className={`w-4 h-4 ${runningActions["packet_analysis"] ? "text-white" : "text-purple-500"}`} />
+                    <FileText className={`w-4 h-4 ${isActionRunning("packet_analysis") ? "text-white" : "text-purple-500"}`} />
                   </span>
-                  {runningActions["packet_analysis"] && (
+                  {isActionRunning("packet_analysis") && (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
                   )}
                 </div>
@@ -917,11 +922,11 @@ export default function App() {
             {/* --- 2.4 DNS ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.dns_analysis?.visible !== false && (
               <button
-                disabled={runningActions["dns_analysis"] || displaySettings?.buttons?.dns_analysis?.enabled === false}
+                disabled={isActionRunning("dns_analysis") || displaySettings?.buttons?.dns_analysis?.enabled === false}
                 onClick={handleDnsAnalysis}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
                   ${
-                    runningActions["dns_analysis"]
+                    isActionRunning("dns_analysis")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg"
                       : displaySettings?.buttons?.dns_analysis?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
@@ -931,9 +936,9 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Activity className={`w-4 h-4 ${runningActions["dns_analysis"] ? "text-white" : "text-teal-500"}`} />
+                    <Activity className={`w-4 h-4 ${isActionRunning("dns_analysis") ? "text-white" : "text-teal-500"}`} />
                   </span>
-                  {runningActions["dns_analysis"] && (
+                  {isActionRunning("dns_analysis") && (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
                   )}
                 </div>

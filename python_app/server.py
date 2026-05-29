@@ -90,6 +90,13 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 metrics["ip_report_exists"] = os.path.exists(system_scripts.PATHS["ip2loc_report_csv"])
                 metrics["dns_report_exists"] = os.path.exists(system_scripts.PATHS["dns_report_csv"])
                 
+                # Check running processes state
+                metrics["running_actions"] = {
+                    "packet_analysis": system_scripts.is_action_active("packet_analysis"),
+                    "dns_analysis": system_scripts.is_action_active("dns_analysis"),
+                    "update_db": False
+                }
+                
                 # Check if logs can be downloaded
                 # dns_report.csv, dns_report.txt, ip2loc_report.txt, ip2loc_report.csv
                 tmp_dir = system_scripts.PATHS["tmp_dir"]
@@ -217,18 +224,18 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_json_response(500, {"success": False, "error": err})
 
         elif self.path == '/api/actions/packet-analysis':
-            # Execute analysis script
-            success, err = system_scripts.run_as_report()
+            # Execute analysis script asynchronously in background
+            success, err = system_scripts.run_as_report_async()
             if success:
-                self.send_json_response(200, {"success": True, "message": "Packet analysis finished successfully."})
+                self.send_json_response(200, {"success": True, "message": "Анализ пакетов запущен в фоновом режиме."})
             else:
                 self.send_json_response(500, {"success": False, "error": err})
 
         elif self.path == '/api/actions/dns-analysis':
-            # Execute dns analysis script
-            success, err = system_scripts.run_dns_report()
+            # Execute dns analysis script asynchronously in background
+            success, err = system_scripts.run_dns_report_async()
             if success:
-                self.send_json_response(200, {"success": True, "message": "DNS analysis finished successfully."})
+                self.send_json_response(200, {"success": True, "message": "Анализ ДНС запущен в фоновом режиме."})
             else:
                 self.send_json_response(500, {"success": False, "error": err})
 

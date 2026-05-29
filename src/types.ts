@@ -63,6 +63,7 @@ export interface SystemMetricsResponse {
   ip_report_exists: boolean;
   dns_report_exists: boolean;
   log_files_available: string[];
+  running_actions?: Record<string, boolean>;
   settings?: SystemSettings;
   paths?: Record<string, string>;
 }
