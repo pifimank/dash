@@ -37,10 +37,20 @@
       "enabled": true,
       "label": "Скачать логи"
     },
+    "clean": {
+      "visible": true,
+      "enabled": true,
+      "label": "Очистить"
+    },
+    "ya_reboot": {
+      "visible": true,
+      "enabled": true,
+      "label": "YA_РЯБУТ"
+    },
     "ya_sleep": {
       "visible": true,
       "enabled": true,
-      "label": "Ya_спать"
+      "label": "YA_СПАТЬ"
     }
   }
 }

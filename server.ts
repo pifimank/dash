@@ -67,6 +67,7 @@ async function startServer() {
   let dbSimulatedError = false;
   let packetAnalysisActive = false;
   let dnsAnalysisActive = false;
+  let cleanActive = false;
   const killedPids = new Set<string>();
 
   // Read settings from python_app
@@ -143,7 +144,8 @@ async function startServer() {
       running_actions: {
         packet_analysis: packetAnalysisActive,
         dns_analysis: dnsAnalysisActive,
-        update_db: false
+        update_db: false,
+        clean: cleanActive,
       },
       traffic_capture_active: trafficCaptureActive,
       ip_report_exists: ipReportExists,
@@ -274,6 +276,18 @@ async function startServer() {
 
   app.post("/api/actions/ya-sleep", (req, res) => {
     res.json({ success: true, message: "System is shutting down now (simulated shutdown triggered)." });
+  });
+
+  app.post("/api/actions/clean", (req, res) => {
+    cleanActive = true;
+    res.json({ success: true, message: "Очистка /mnt/pcaps и /tmp запущена." });
+    setTimeout(() => {
+      cleanActive = false;
+    }, 3000);
+  });
+
+  app.post("/api/actions/ya-reboot", (req, res) => {
+    res.json({ success: true, message: "Система перезагружается... (simulated reboot triggered)." });
   });
 
   app.get("/api/download/logs", (req, res) => {

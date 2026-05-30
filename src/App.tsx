@@ -18,6 +18,8 @@ import {
   Moon, 
   Network, 
   RefreshCw, 
+  RotateCw,
+  Trash2,
   Search, 
   Settings, 
   Shield, 
@@ -219,12 +221,16 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
 
+  const MAIN_SERVICE_ACTION_KEYS = ["update_db", "traffic_capture", "packet_analysis", "dns_analysis"] as const;
+  const BACKGROUND_ACTION_KEYS = new Set(["packet_analysis", "dns_analysis", "clean"]);
+
   const isActionRunning = (key: string) => {
     return !!(runningActions[key] || metrics?.running_actions?.[key]);
   };
 
-  const isAnyActionRunning = Object.keys(runningActions).some((key) => runningActions[key]) || 
-                             (metrics?.running_actions ? Object.values(metrics.running_actions).some((val) => val) : false);
+  const isAnyMainServiceActionRunning = MAIN_SERVICE_ACTION_KEYS.some((key) => isActionRunning(key));
+  const isPanelLocked = isAnyMainServiceActionRunning || isActionRunning("clean");
+  const isAnyActionRunning = isPanelLocked;
 
   const formatUptime = (raw: string | undefined): string => {
     if (!raw) return "Опрос...";
@@ -279,9 +285,31 @@ export default function App() {
     return () => clearInterval(interval);
   }, [localSettings]);
 
+  // Clear local running state when background jobs finish on the server
+  useEffect(() => {
+    if (!metrics?.running_actions) return;
+    setRunningActions((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const key of BACKGROUND_ACTION_KEYS) {
+        if (!metrics.running_actions?.[key] && next[key]) {
+          next[key] = false;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [metrics?.running_actions]);
+
   // Trigger Backend Python Actions (now uses non-blocking runningActions)
   const runAction = async (actionKey: string, endpoint: string, body?: any) => {
-    if (runningActions[actionKey]) return; // Prevent concurrent duplicate runs on same action key
+    if (MAIN_SERVICE_ACTION_KEYS.includes(actionKey as typeof MAIN_SERVICE_ACTION_KEYS[number]) && isAnyMainServiceActionRunning) {
+      return;
+    }
+    if (actionKey === "clean" && (isAnyMainServiceActionRunning || isActionRunning("clean"))) {
+      return;
+    }
+    if (runningActions[actionKey]) return;
     setRunningActions(prev => ({ ...prev, [actionKey]: true }));
     setErrorLog(null);
     setSuccessMessage(null);
@@ -304,7 +332,29 @@ export default function App() {
       console.error(err);
       setErrorLog(`${err.message}`);
     } finally {
-      setRunningActions(prev => ({ ...prev, [actionKey]: false }));
+      if (!BACKGROUND_ACTION_KEYS.has(actionKey)) {
+        setRunningActions(prev => ({ ...prev, [actionKey]: false }));
+      }
+    }
+  };
+
+  const runEmergencyAction = async (endpoint: string, confirmMessage: string) => {
+    if (!window.confirm(confirmMessage)) return;
+    setErrorLog(null);
+    setSuccessMessage(null);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const resData = await res.json();
+      if (!res.ok || resData.success === false) {
+        throw new Error(resData.error || "Произошла неизвестная системная ошибка");
+      }
+      setSuccessMessage(resData.message || "Действие выполнено успешно!");
+    } catch (err: any) {
+      console.error(err);
+      setErrorLog(`${err.message}`);
     }
   };
 
@@ -330,6 +380,17 @@ export default function App() {
 
   const handleDnsAnalysis = () => {
     runAction("dns_analysis", "/api/actions/dns-analysis");
+  };
+
+  const handleClean = () => {
+    runAction("clean", "/api/actions/clean");
+  };
+
+  const handleYaReboot = () => {
+    runEmergencyAction(
+      "/api/actions/ya-reboot",
+      "Вы уверены, что хотите перезагрузить сервер (shutdown -r now)?"
+    );
   };
 
   // Kill Process Row Handler
@@ -365,9 +426,10 @@ export default function App() {
   };
 
   const handleYaSleep = () => {
-    if (window.confirm("Вы уверены, что хотите запустить выключение сервера через 'shutdown now'?")) {
-      runAction("ya_sleep", "/api/actions/ya-sleep");
-    }
+    runEmergencyAction(
+      "/api/actions/ya-sleep",
+      "Вы уверены, что хотите выключить сервер через 'shutdown now'?"
+    );
   };
 
   // Log Zip Downloader
@@ -822,15 +884,15 @@ export default function App() {
             {/* --- 2.1 UPDATE BASE BUTTON --- */}
             {displaySettings?.buttons?.update_db?.visible !== false && (
               <button
-                disabled={isActionRunning("update_db") || displaySettings?.buttons?.update_db?.enabled === false}
+                disabled={isPanelLocked || displaySettings?.buttons?.update_db?.enabled === false}
                 onClick={handleUpdateDB}
-                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
+                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("update_db")
-                      ? "bg-blue-600 border-blue-500 text-white shadow-lg"
-                      : displaySettings?.buttons?.update_db?.enabled === false
+                      ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
+                      : isPanelLocked || displaySettings?.buttons?.update_db?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
-                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-blue-450 hover:translate-y-[-2px] shadow-sm"
+                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-blue-450 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
                 `}
               >
@@ -854,17 +916,17 @@ export default function App() {
             {/* --- 2.2 PACKET CAPTURE BUTTON --- */}
             {displaySettings?.buttons?.traffic_capture?.visible !== false && (
               <button
-                disabled={isActionRunning("traffic_capture") || displaySettings?.buttons?.traffic_capture?.enabled === false}
+                disabled={isPanelLocked || displaySettings?.buttons?.traffic_capture?.enabled === false}
                 onClick={handleTrafficCapture}
-                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
+                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("traffic_capture")
-                      ? "bg-blue-600 border-blue-500 text-white shadow-lg"
-                      : metrics?.traffic_capture_active
-                      ? "bg-emerald-50 border-emerald-350 text-emerald-800 font-bold"
-                      : displaySettings?.buttons?.traffic_capture?.enabled === false
+                      ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
+                      : isPanelLocked || displaySettings?.buttons?.traffic_capture?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
-                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-805 hover:border-emerald-500/40 hover:translate-y-[-2px] shadow-sm"
+                      : metrics?.traffic_capture_active
+                      ? "bg-emerald-50 border-emerald-350 text-emerald-800 font-bold cursor-pointer"
+                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-805 hover:border-emerald-500/40 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
                 `}
               >
@@ -890,15 +952,15 @@ export default function App() {
             {/* --- 2.3 PACKET ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.packet_analysis?.visible !== false && (
               <button
-                disabled={isActionRunning("packet_analysis") || displaySettings?.buttons?.packet_analysis?.enabled === false}
+                disabled={isPanelLocked || displaySettings?.buttons?.packet_analysis?.enabled === false}
                 onClick={handlePacketAnalysis}
-                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
+                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("packet_analysis")
-                      ? "bg-blue-600 border-blue-500 text-white shadow-lg"
-                      : displaySettings?.buttons?.packet_analysis?.enabled === false
+                      ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
+                      : isPanelLocked || displaySettings?.buttons?.packet_analysis?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
-                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-blue-405 hover:translate-y-[-2px] shadow-sm"
+                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-blue-405 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
                 `}
               >
@@ -922,15 +984,15 @@ export default function App() {
             {/* --- 2.4 DNS ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.dns_analysis?.visible !== false && (
               <button
-                disabled={isActionRunning("dns_analysis") || displaySettings?.buttons?.dns_analysis?.enabled === false}
+                disabled={isPanelLocked || displaySettings?.buttons?.dns_analysis?.enabled === false}
                 onClick={handleDnsAnalysis}
-                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
+                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("dns_analysis")
-                      ? "bg-blue-600 border-blue-500 text-white shadow-lg"
-                      : displaySettings?.buttons?.dns_analysis?.enabled === false
+                      ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
+                      : isPanelLocked || displaySettings?.buttons?.dns_analysis?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
-                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-808 hover:border-[#10b981]/40 hover:translate-y-[-2px] shadow-sm"
+                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-808 hover:border-[#10b981]/40 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
                 `}
               >
@@ -954,19 +1016,19 @@ export default function App() {
             {/* --- 2.5 IP ADDRESSES TABLE --- */}
             {displaySettings?.buttons?.ip_addresses?.visible !== false && (
               <a
-                href={metrics?.ip_report_exists ? "/report-ip" : undefined}
+                href={metrics?.ip_report_exists && !isPanelLocked ? "/report-ip" : undefined}
                 target="_blank"
                 rel="noopener noreferrer"
+                aria-disabled={isPanelLocked || !metrics?.ip_report_exists || displaySettings?.buttons?.ip_addresses?.enabled === false}
                 onClick={(e) => {
-                  if (!metrics?.ip_report_exists) {
+                  if (!metrics?.ip_report_exists || isPanelLocked || displaySettings?.buttons?.ip_addresses?.enabled === false) {
                     e.preventDefault();
-                    return;
                   }
                 }}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative select-none
                   ${
-                    !metrics?.ip_report_exists || displaySettings?.buttons?.ip_addresses?.enabled === false
-                      ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50 font-semibold"
+                    !metrics?.ip_report_exists || isPanelLocked || displaySettings?.buttons?.ip_addresses?.enabled === false
+                      ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50 font-semibold pointer-events-none"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:translate-y-[-2px] shadow-sm border-l-4 border-l-blue-500 cursor-pointer"
                   }
                 `}
@@ -991,19 +1053,19 @@ export default function App() {
             {/* --- 2.6 DNS RECORDS TABLE --- */}
             {displaySettings?.buttons?.dns_records?.visible !== false && (
               <a
-                href={metrics?.dns_report_exists ? "/report-dns" : undefined}
+                href={metrics?.dns_report_exists && !isPanelLocked ? "/report-dns" : undefined}
                 target="_blank"
                 rel="noopener noreferrer"
+                aria-disabled={isPanelLocked || !metrics?.dns_report_exists || displaySettings?.buttons?.dns_records?.enabled === false}
                 onClick={(e) => {
-                  if (!metrics?.dns_report_exists) {
+                  if (!metrics?.dns_report_exists || isPanelLocked || displaySettings?.buttons?.dns_records?.enabled === false) {
                     e.preventDefault();
-                    return;
                   }
                 }}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative select-none
                   ${
-                    !metrics?.dns_report_exists || displaySettings?.buttons?.dns_records?.enabled === false
-                      ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50 font-semibold"
+                    !metrics?.dns_report_exists || isPanelLocked || displaySettings?.buttons?.dns_records?.enabled === false
+                      ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50 font-semibold pointer-events-none"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:translate-y-[-2px] shadow-sm border-l-4 border-l-blue-500 cursor-pointer"
                   }
                 `}
@@ -1028,13 +1090,13 @@ export default function App() {
             {/* --- 2.7 DOWNLOAD LOGS ZIP --- */}
             {displaySettings?.buttons?.download_logs?.visible !== false && (
               <button
-                disabled={!logsExist || displaySettings?.buttons?.download_logs?.enabled === false}
+                disabled={!logsExist || isPanelLocked || displaySettings?.buttons?.download_logs?.enabled === false}
                 onClick={handleDownloadLogs}
-                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative cursor-pointer
+                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
-                    !logsExist || displaySettings?.buttons?.download_logs?.enabled === false
+                    !logsExist || isPanelLocked || displaySettings?.buttons?.download_logs?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
-                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:translate-y-[-2px] shadow-sm"
+                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
                 `}
               >
@@ -1052,18 +1114,63 @@ export default function App() {
               </button>
             )}
 
-            {/* --- 2.8 YA SLEEP --- */}
-            {displaySettings?.buttons?.ya_sleep?.visible !== false && (
+            {/* --- 2.8 CLEAN DIRECTORIES --- */}
+            {displaySettings?.buttons?.clean?.visible !== false && (
               <button
-                disabled={displaySettings?.buttons?.ya_sleep?.enabled === false}
-                onClick={handleYaSleep}
-                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-bold transition-all group relative cursor-pointer
+                disabled={isAnyMainServiceActionRunning || isActionRunning("clean") || displaySettings?.buttons?.clean?.enabled === false}
+                onClick={handleClean}
+                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
-                    displaySettings?.buttons?.ya_sleep?.enabled === false
+                    isActionRunning("clean")
+                      ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
+                      : isAnyMainServiceActionRunning || displaySettings?.buttons?.clean?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
-                      : "bg-red-50 hover:bg-red-500 text-red-650 hover:text-white border-red-250 hover:translate-y-[-2px] shadow-sm font-bold"
+                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-orange-400/40 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
                 `}
+              >
+                <div className="flex justify-between w-full">
+                  <span className="p-2 rounded-lg bg-white border border-sky-200">
+                    <Trash2 className={`w-4 h-4 ${isActionRunning("clean") ? "text-white" : "text-orange-500"}`} />
+                  </span>
+                  {isActionRunning("clean") && (
+                    <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
+                  )}
+                </div>
+                <div>
+                  <span className="block font-bold text-slate-800">{displaySettings?.buttons?.clean?.label || "Очистить"}</span>
+                  <span className="text-[11px] text-slate-405 font-normal mt-0.5 block font-sans">
+                    Очистка /mnt/pcaps и /tmp
+                  </span>
+                </div>
+              </button>
+            )}
+
+            {/* --- 2.9 YA REBOOT --- */}
+            {displaySettings?.buttons?.ya_reboot?.visible !== false && (
+              <button
+                onClick={handleYaReboot}
+                className="flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-bold transition-all group relative cursor-pointer bg-amber-50 hover:bg-amber-500 text-amber-700 hover:text-white border-amber-200 hover:translate-y-[-2px] shadow-sm"
+              >
+                <div className="flex justify-between w-full">
+                  <span className="p-2 rounded-lg bg-white border border-amber-200">
+                    <RotateCw className="w-4 h-4 text-amber-600" />
+                  </span>
+                </div>
+                <div>
+                  <span className="block font-bold uppercase tracking-wider">{displaySettings?.buttons?.ya_reboot?.label || "YA_РЯБУТ"}</span>
+                  <span className="text-[11px] text-amber-600 group-hover:text-amber-100 font-bold mt-0.5 block font-mono">
+                    shutdown -r now
+                  </span>
+                </div>
+              </button>
+            )}
+
+            {/* --- 2.10 YA SLEEP --- */}
+            {displaySettings?.buttons?.ya_sleep?.visible !== false && (
+              <button
+                onClick={handleYaSleep}
+                className="flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-bold transition-all group relative cursor-pointer bg-red-50 hover:bg-red-500 text-red-650 hover:text-white border-red-250 hover:translate-y-[-2px] shadow-sm font-bold"
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-red-200">
@@ -1071,8 +1178,8 @@ export default function App() {
                   </span>
                 </div>
                 <div>
-                  <span className="block font-bold uppercase tracking-wider">{displaySettings?.buttons?.ya_sleep?.label || "Ya_спать"}</span>
-                  <span className="text-[11px] text-red-500 font-bold mt-0.5 block font-mono">
+                  <span className="block font-bold uppercase tracking-wider">{displaySettings?.buttons?.ya_sleep?.label || "YA_СПАТЬ"}</span>
+                  <span className="text-[11px] text-red-500 group-hover:text-red-100 font-bold mt-0.5 block font-mono">
                     shutdown now
                   </span>
                 </div>
@@ -1142,9 +1249,12 @@ export default function App() {
                     { key: "ip_addresses", label: "IP адреса" },
                     { key: "dns_records", label: "ДНС" },
                     { key: "download_logs", label: "Скачать логи" },
-                    { key: "ya_sleep", label: "Ya_спать" },
+                    { key: "clean", label: "Очистить" },
+                    { key: "ya_reboot", label: "YA_РЯБУТ", alwaysActive: true },
+                    { key: "ya_sleep", label: "YA_СПАТЬ", alwaysActive: true },
                   ].map((btn) => {
                     const cfg = (localSettings?.buttons as any)?.[btn.key];
+                    const alwaysActive = "alwaysActive" in btn && btn.alwaysActive;
                     return (
                       <div key={btn.key} className="p-3 bg-sky-50/40 border border-sky-100/80 rounded-xl space-y-2 animate-fade-in">
                         <div className="text-xs font-bold text-slate-700 font-sans">{btn.label}</div>
@@ -1158,15 +1268,21 @@ export default function App() {
                               className="rounded bg-white border-sky-200 text-blue-500 focus:ring-0 scale-90 w-3.5 h-3.5"
                             />
                           </label>
-                          <label className="flex items-center justify-between bg-white border border-sky-100/50 p-1.5 px-2 rounded cursor-pointer text-[10px] text-slate-500 font-mono">
-                            <span>ACTIVE</span>
-                            <input
-                              type="checkbox"
-                              checked={cfg?.enabled !== false}
-                              onChange={() => toggleSetting("enabled", btn.key)}
-                              className="rounded bg-white border-sky-200 text-blue-500 focus:ring-0 scale-90 w-3.5 h-3.5"
-                            />
-                          </label>
+                          {alwaysActive ? (
+                            <div className="flex items-center justify-center bg-white border border-sky-100/50 p-1.5 px-2 rounded text-[10px] text-emerald-600 font-mono font-semibold">
+                              ALWAYS ON
+                            </div>
+                          ) : (
+                            <label className="flex items-center justify-between bg-white border border-sky-100/50 p-1.5 px-2 rounded cursor-pointer text-[10px] text-slate-500 font-mono">
+                              <span>ACTIVE</span>
+                              <input
+                                type="checkbox"
+                                checked={cfg?.enabled !== false}
+                                onChange={() => toggleSetting("enabled", btn.key)}
+                                className="rounded bg-white border-sky-200 text-blue-500 focus:ring-0 scale-90 w-3.5 h-3.5"
+                              />
+                            </label>
+                          )}
                         </div>
                       </div>
                     );

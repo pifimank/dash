@@ -98,6 +98,57 @@ def control_traffic_capture(action):
         return False, f"systemctl {action} failed: {stderr or stdout}"
     return True, ""
 
+CLEAN_DIRECTORIES = ["/mnt/pcaps", "/tmp"]
+_clean_lock = threading.Lock()
+_clean_running = False
+
+def _clear_directory_contents(directory):
+    """Remove all files and subdirectories inside directory, keep the directory itself."""
+    if not os.path.isdir(directory):
+        return []
+
+    errors = []
+    for entry in os.listdir(directory):
+        path = os.path.join(directory, entry)
+        try:
+            if os.path.isfile(path) or os.path.islink(path):
+                os.unlink(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+        except Exception as e:
+            errors.append(f"{path}: {e}")
+    return errors
+
+def clean_directories():
+    """Delete everything inside /mnt/pcaps and /tmp."""
+    global _clean_running
+    with _clean_lock:
+        if _clean_running:
+            return True, ""
+        _clean_running = True
+
+    try:
+        errors = []
+        for directory in CLEAN_DIRECTORIES:
+            errors.extend(_clear_directory_contents(directory))
+        if errors:
+            return False, "; ".join(errors)
+        return True, ""
+    finally:
+        with _clean_lock:
+            _clean_running = False
+
+def is_clean_running():
+    with _clean_lock:
+        return _clean_running
+
+def ya_reboot():
+    """Reboot the operating system immediately."""
+    _, stderr, code = run_command(["shutdown", "-r", "now"])
+    if code != 0:
+        return False, f"Failed to execute reboot: {stderr}"
+    return True, ""
+
 # --- Background analysis jobs (tracked by PID, not Popen) ---
 _active_pids = {
     "packet_analysis": None,
@@ -385,6 +436,7 @@ def _build_dashboard_snapshot():
         "packet_analysis": is_action_active("packet_analysis"),
         "dns_analysis": is_action_active("dns_analysis"),
         "update_db": False,
+        "clean": is_clean_running(),
     }
 
     tmp_dir = PATHS["tmp_dir"]
@@ -474,3 +526,9 @@ def schedule_dns_report():
     ensure_action_worker()
     with _action_queue_lock:
         _action_queue.append(run_dns_report_async)
+
+def schedule_clean():
+    """Queue directory cleanup so the HTTP handler returns immediately."""
+    ensure_action_worker()
+    with _action_queue_lock:
+        _action_queue.append(clean_directories)

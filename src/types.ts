@@ -48,6 +48,8 @@ export interface SystemSettings {
     ip_addresses: ButtonConfig;
     dns_records: ButtonConfig;
     download_logs: ButtonConfig;
+    clean: ButtonConfig;
+    ya_reboot: ButtonConfig;
     ya_sleep: ButtonConfig;
   };
 }

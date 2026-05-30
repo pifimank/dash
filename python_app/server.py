@@ -198,9 +198,18 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             system_scripts.schedule_dns_report()
             self.send_json_response(200, {"success": True, "message": "Анализ ДНС запущен в фоновом режиме."})
 
+        elif self.path == '/api/actions/clean':
+            system_scripts.schedule_clean()
+            self.send_json_response(200, {"success": True, "message": "Очистка /mnt/pcaps и /tmp запущена."})
+
+        elif self.path == '/api/actions/ya-reboot':
+            success, err = system_scripts.ya_reboot()
+            if success:
+                self.send_json_response(200, {"success": True, "message": "Система перезагружается..."})
+            else:
+                self.send_json_response(500, {"success": False, "error": err})
+
         elif self.path == '/api/actions/ya-sleep':
-            # Ya sleep -> Shutdown now
-            # Execute shutdown
             _, stderr, code = system_scripts.run_command(["shutdown", "now"])
             if code == 0:
                 self.send_json_response(200, {"success": True, "message": "System is shutting down now."})
