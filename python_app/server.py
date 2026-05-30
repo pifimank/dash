@@ -4,6 +4,7 @@ import json
 import zipfile
 import glob
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 import socket
 
 # Add current directory to path to load system_scripts
@@ -258,18 +259,23 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response_bytes)
 
-# Dual stack IPv4 and IPv6 HTTPServer
+# Dual stack IPv4 and IPv6 HTTPServer (threaded so long-running actions
+# don't block /api/metrics polling for CPU, RAM, etc.)
 class DualStackHTTPServer(HTTPServer):
     def server_bind(self):
         # Enable dual stack
         self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         HTTPServer.server_bind(self)
 
+class ThreadingDualStackHTTPServer(ThreadingMixIn, DualStackHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
 def run():
     server_address = ('', PORT)
     # Use IPv6 socket to bind both IPv4 and IPv6 interfaces
-    DualStackHTTPServer.address_family = socket.AF_INET6
-    httpd = DualStackHTTPServer(server_address, DashboardHTTPRequestHandler)
+    ThreadingDualStackHTTPServer.address_family = socket.AF_INET6
+    httpd = ThreadingDualStackHTTPServer(server_address, DashboardHTTPRequestHandler)
     print(f"Server starts on port {PORT} (IPv4 and IPv6 compatible)...")
     try:
         httpd.serve_forever()

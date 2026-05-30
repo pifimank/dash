@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import shutil
+import threading
 import urllib.request
 import zipfile
 import subprocess
@@ -91,69 +92,66 @@ def control_traffic_capture(action):
         return False, f"systemctl {action} failed: {stderr or stdout}"
     return True, ""
 
-def run_as_report_async():
-    """Run packet analysis command asynchronously in background."""
-    global _active_processes
-    script = PATHS["as_report_script"]
-    if is_action_active("packet_analysis"):
-        return True, ""
-        
-    if not os.path.exists(script):
-        # Fallback simulation representing complete success in developer environment
-        try:
-            proc = subprocess.Popen(["sleep", "12"])
-            _active_processes["packet_analysis"] = proc
-            return True, ""
-        except Exception as e:
-            return False, str(e)
-            
-    try:
-        proc = subprocess.Popen([script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _active_processes["packet_analysis"] = proc
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
-def run_dns_report_async():
-    """Run DNS analysis command asynchronously in background."""
-    global _active_processes
-    script = PATHS["dns_report_script"]
-    if is_action_active("dns_analysis"):
-        return True, ""
-        
-    if not os.path.exists(script):
-        try:
-            proc = subprocess.Popen(["sleep", "15"])
-            _active_processes["dns_analysis"] = proc
-            return True, ""
-        except Exception as e:
-            return False, str(e)
-            
-    try:
-        proc = subprocess.Popen([script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _active_processes["dns_analysis"] = proc
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
 _active_processes = {
     "packet_analysis": None,
     "dns_analysis": None
 }
+_process_lock = threading.Lock()
+_prev_cpu_stats = {}
+_cpu_stats_lock = threading.Lock()
 
-def is_action_active(key):
-    """Check if process is active."""
-    global _active_processes
+def _is_action_active_unlocked(key):
     proc = _active_processes.get(key)
     if proc is None:
         return False
     return proc.poll() is None
 
-_prev_cpu_stats = {}
+def _start_background_process(key, args):
+    """Start a detached subprocess and track it without blocking the HTTP handler."""
+    with _process_lock:
+        if _is_action_active_unlocked(key):
+            return True, ""
+        try:
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            _active_processes[key] = proc
+        except Exception as e:
+            return False, str(e)
+
+    def _reap():
+        proc.wait()
+        with _process_lock:
+            if _active_processes.get(key) is proc:
+                _active_processes[key] = None
+
+    threading.Thread(target=_reap, daemon=True).start()
+    return True, ""
+
+def run_as_report_async():
+    """Run packet analysis command asynchronously in background."""
+    script = PATHS["as_report_script"]
+    if not os.path.exists(script):
+        return _start_background_process("packet_analysis", ["sleep", "12"])
+    return _start_background_process("packet_analysis", [script])
+
+def run_dns_report_async():
+    """Run DNS analysis command asynchronously in background."""
+    script = PATHS["dns_report_script"]
+    if not os.path.exists(script):
+        return _start_background_process("dns_analysis", ["sleep", "15"])
+    return _start_background_process("dns_analysis", [script])
+
+def is_action_active(key):
+    """Check if process is active."""
+    with _process_lock:
+        return _is_action_active_unlocked(key)
 
 def get_system_metrics():
     """Get system stats using native commands /proc/stat, free, df, uptime, top."""
-    global _prev_cpu_stats
     metrics = {
         "cores": [],
         "ram": {"total": 0, "used": 0, "free": 0},
@@ -174,32 +172,33 @@ def get_system_metrics():
                 lines = f.readlines()
             # Find lines starting with 'cpu[0-9]'
             cores_data = []
-            for line in lines:
-                parts = line.split()
-                if len(parts) > 4 and parts[0].startswith("cpu") and parts[0] != "cpu":
-                    core_name = parts[0]
-                    # total = user + nice + system + idle + iowait + irq + softirq + steal...
-                    fields = [float(x) for x in parts[1:8]]
-                    idle = fields[3] + fields[4] # idle + iowait
-                    total = sum(fields)
-                    
-                    if core_name in _prev_cpu_stats:
-                        prev_total, prev_idle = _prev_cpu_stats[core_name]
-                        diff_total = total - prev_total
-                        diff_idle = idle - prev_idle
-                        if diff_total > 0:
-                            usage = (diff_total - diff_idle) / diff_total
-                            load = round(max(0.0, min(100.0, usage * 100)), 1)
+            with _cpu_stats_lock:
+                for line in lines:
+                    parts = line.split()
+                    if len(parts) > 4 and parts[0].startswith("cpu") and parts[0] != "cpu":
+                        core_name = parts[0]
+                        # total = user + nice + system + idle + iowait + irq + softirq + steal...
+                        fields = [float(x) for x in parts[1:8]]
+                        idle = fields[3] + fields[4] # idle + iowait
+                        total = sum(fields)
+                        
+                        if core_name in _prev_cpu_stats:
+                            prev_total, prev_idle = _prev_cpu_stats[core_name]
+                            diff_total = total - prev_total
+                            diff_idle = idle - prev_idle
+                            if diff_total > 0:
+                                usage = (diff_total - diff_idle) / diff_total
+                                load = round(max(0.0, min(100.0, usage * 100)), 1)
+                            else:
+                                load = 0.0
                         else:
-                            load = 0.0
-                    else:
-                        if total > 0:
-                            load = round(max(0.0, min(100.0, (total - idle) / total * 100)), 1)
-                        else:
-                            load = 0.0
-                            
-                    _prev_cpu_stats[core_name] = (total, idle)
-                    cores_data.append({"core": core_name, "load": load})
+                            if total > 0:
+                                load = round(max(0.0, min(100.0, (total - idle) / total * 100)), 1)
+                            else:
+                                load = 0.0
+                                
+                        _prev_cpu_stats[core_name] = (total, idle)
+                        cores_data.append({"core": core_name, "load": load})
             metrics["cores"] = cores_data
         else:
             # Fallback for systems without /proc/stat
