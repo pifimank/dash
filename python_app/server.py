@@ -83,41 +83,7 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
         # GET metrics, state or reports
         if self.path == '/api/metrics':
             try:
-                metrics = system_scripts.get_system_metrics()
-                # Also include packet capture running flag
-                metrics["traffic_capture_active"] = system_scripts.check_traffic_capture_status()
-                
-                # Check for table presence
-                metrics["ip_report_exists"] = os.path.exists(system_scripts.PATHS["ip2loc_report_csv"])
-                metrics["dns_report_exists"] = os.path.exists(system_scripts.PATHS["dns_report_csv"])
-                
-                # Check running processes state
-                metrics["running_actions"] = {
-                    "packet_analysis": system_scripts.is_action_active("packet_analysis"),
-                    "dns_analysis": system_scripts.is_action_active("dns_analysis"),
-                    "update_db": False
-                }
-                
-                # Check if logs can be downloaded
-                # dns_report.csv, dns_report.txt, ip2loc_report.txt, ip2loc_report.csv
-                tmp_dir = system_scripts.PATHS["tmp_dir"]
-                log_files = []
-                for pattern in ["*dns_report*", "*ip2loc_report*"]:
-                    for f in glob.glob(os.path.join(tmp_dir, pattern)):
-                        log_files.append(os.path.basename(f))
-                metrics["log_files_available"] = list(set(log_files))
-                
-                # Load configuration dynamically
-                config_file = os.path.join(os.path.dirname(__file__), 'settings.json')
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    metrics["settings"] = json.load(f)
-                
-                # Load paths dynamically
-                paths_file = os.path.join(os.path.dirname(__file__), 'paths.json')
-                with open(paths_file, 'r', encoding='utf-8') as f:
-                    metrics["paths"] = json.load(f)
-
-                self.send_json_response(200, metrics)
+                self.send_json_response(200, system_scripts.get_dashboard_metrics())
             except Exception as e:
                 self.send_json_response(500, {"error": str(e)})
 
@@ -225,20 +191,12 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_json_response(500, {"success": False, "error": err})
 
         elif self.path == '/api/actions/packet-analysis':
-            # Execute analysis script asynchronously in background
-            success, err = system_scripts.run_as_report_async()
-            if success:
-                self.send_json_response(200, {"success": True, "message": "Анализ пакетов запущен в фоновом режиме."})
-            else:
-                self.send_json_response(500, {"success": False, "error": err})
+            system_scripts.schedule_as_report()
+            self.send_json_response(200, {"success": True, "message": "Анализ пакетов запущен в фоновом режиме."})
 
         elif self.path == '/api/actions/dns-analysis':
-            # Execute dns analysis script asynchronously in background
-            success, err = system_scripts.run_dns_report_async()
-            if success:
-                self.send_json_response(200, {"success": True, "message": "Анализ ДНС запущен в фоновом режиме."})
-            else:
-                self.send_json_response(500, {"success": False, "error": err})
+            system_scripts.schedule_dns_report()
+            self.send_json_response(200, {"success": True, "message": "Анализ ДНС запущен в фоновом режиме."})
 
         elif self.path == '/api/actions/ya-sleep':
             # Ya sleep -> Shutdown now
@@ -272,6 +230,7 @@ class ThreadingDualStackHTTPServer(ThreadingMixIn, DualStackHTTPServer):
     allow_reuse_address = True
 
 def run():
+    system_scripts.ensure_metrics_collector()
     server_address = ('', PORT)
     # Use IPv6 socket to bind both IPv4 and IPv6 interfaces
     ThreadingDualStackHTTPServer.address_family = socket.AF_INET6
