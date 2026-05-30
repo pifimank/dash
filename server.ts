@@ -65,6 +65,7 @@ async function startServer() {
   // Initialize service active status and db simulated status
   let trafficCaptureActive = false;
   let dbSimulatedError = false;
+  let updateDbActive = false;
   let packetAnalysisActive = false;
   let dnsAnalysisActive = false;
   let cleanActive = false;
@@ -144,7 +145,7 @@ async function startServer() {
       running_actions: {
         packet_analysis: packetAnalysisActive,
         dns_analysis: dnsAnalysisActive,
-        update_db: false,
+        update_db: updateDbActive,
         clean: cleanActive,
       },
       traffic_capture_active: trafficCaptureActive,
@@ -189,14 +190,16 @@ async function startServer() {
   });
 
   app.post("/api/actions/update-db", (req, res) => {
-    // Simulate latency of download (e.g. 1.5 seconds)
+    updateDbActive = true;
+    res.json({ success: true, message: "Обновление баз запущено в фоновом режиме." });
     setTimeout(() => {
       if (dbSimulatedError) {
-        dbSimulatedError = false; // Reset toggle
-        return res.status(500).json({ success: false, error: "Network timed out trying to reach ip2location.com" });
+        dbSimulatedError = false;
+        updateDbActive = false;
+        return;
       }
-      res.json({ success: true, message: "Databases successfully updated and extracted." });
-    }, 1500);
+      updateDbActive = false;
+    }, 8000);
   });
 
   app.post("/api/actions/traffic-capture", (req, res) => {

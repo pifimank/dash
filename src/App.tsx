@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { 
   Activity, 
   Cpu, 
@@ -220,16 +220,25 @@ export default function App() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
+  const prevUpdateDbRunning = useRef(false);
+
+  const displaySettings = localSettings || metrics?.settings;
 
   const MAIN_SERVICE_ACTION_KEYS = ["update_db", "traffic_capture", "packet_analysis", "dns_analysis"] as const;
-  const BACKGROUND_ACTION_KEYS = new Set(["packet_analysis", "dns_analysis", "clean"]);
+  const BACKGROUND_ACTION_KEYS = new Set(["update_db", "packet_analysis", "dns_analysis", "clean"]);
 
   const isActionRunning = (key: string) => {
     return !!(runningActions[key] || metrics?.running_actions?.[key]);
   };
 
+  const isCaptureServiceActive = metrics?.traffic_capture_active === true;
   const isAnyMainServiceActionRunning = MAIN_SERVICE_ACTION_KEYS.some((key) => isActionRunning(key));
-  const isPanelLocked = isAnyMainServiceActionRunning || isActionRunning("clean");
+  // Lock panel while a main action runs, clean runs, or packet capture service is active
+  const isPanelLocked = isAnyMainServiceActionRunning || isActionRunning("clean") || isCaptureServiceActive;
+  // Allow stopping capture while service is active — only this button stays clickable
+  const isTrafficCaptureClickable =
+    displaySettings?.buttons?.traffic_capture?.enabled !== false &&
+    !(isPanelLocked && !isCaptureServiceActive);
   const isAnyActionRunning = isPanelLocked;
 
   const formatUptime = (raw: string | undefined): string => {
@@ -262,8 +271,8 @@ export default function App() {
   };
 
   // Fetch metrics helper
-  const fetchMetrics = () => {
-    fetch("/api/metrics")
+  const fetchMetrics = (): Promise<void> => {
+    return fetch("/api/metrics")
       .then((res) => res.json())
       .then((data: SystemMetricsResponse) => {
         setMetrics(data);
@@ -301,12 +310,27 @@ export default function App() {
     });
   }, [metrics?.running_actions]);
 
+  // Notify when background database update completes
+  useEffect(() => {
+    const running = metrics?.running_actions?.update_db === true;
+    if (prevUpdateDbRunning.current && !running) {
+      setSuccessMessage("Базы данных успешно обновлены.");
+    }
+    prevUpdateDbRunning.current = running;
+  }, [metrics?.running_actions?.update_db]);
+
   // Trigger Backend Python Actions (now uses non-blocking runningActions)
   const runAction = async (actionKey: string, endpoint: string, body?: any) => {
-    if (MAIN_SERVICE_ACTION_KEYS.includes(actionKey as typeof MAIN_SERVICE_ACTION_KEYS[number]) && isAnyMainServiceActionRunning) {
+    if (
+      MAIN_SERVICE_ACTION_KEYS.includes(actionKey as typeof MAIN_SERVICE_ACTION_KEYS[number]) &&
+      isAnyMainServiceActionRunning
+    ) {
       return;
     }
-    if (actionKey === "clean" && (isAnyMainServiceActionRunning || isActionRunning("clean"))) {
+    if (actionKey !== "traffic_capture" && isCaptureServiceActive) {
+      return;
+    }
+    if (actionKey === "clean" && (isAnyMainServiceActionRunning || isCaptureServiceActive || isActionRunning("clean"))) {
       return;
     }
     if (runningActions[actionKey]) return;
@@ -327,7 +351,7 @@ export default function App() {
       }
 
       setSuccessMessage(resData.message || "Действие выполнено успешно!");
-      fetchMetrics(); // Refresh metrics instantly
+      await fetchMetrics();
     } catch (err: any) {
       console.error(err);
       setErrorLog(`${err.message}`);
@@ -470,9 +494,6 @@ export default function App() {
 
   // Check if any log is present
   const logsExist = metrics?.ip_report_exists || metrics?.dns_report_exists;
-
-  // Custom button checker
-  const displaySettings = localSettings || metrics?.settings;
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-805 pb-20 font-sans relative antialiased leading-relaxed select-text">
@@ -916,13 +937,13 @@ export default function App() {
             {/* --- 2.2 PACKET CAPTURE BUTTON --- */}
             {displaySettings?.buttons?.traffic_capture?.visible !== false && (
               <button
-                disabled={isPanelLocked || displaySettings?.buttons?.traffic_capture?.enabled === false}
+                disabled={!isTrafficCaptureClickable}
                 onClick={handleTrafficCapture}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("traffic_capture")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
-                      : isPanelLocked || displaySettings?.buttons?.traffic_capture?.enabled === false
+                      : !isTrafficCaptureClickable
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : metrics?.traffic_capture_active
                       ? "bg-emerald-50 border-emerald-350 text-emerald-800 font-bold cursor-pointer"
@@ -1117,13 +1138,13 @@ export default function App() {
             {/* --- 2.8 CLEAN DIRECTORIES --- */}
             {displaySettings?.buttons?.clean?.visible !== false && (
               <button
-                disabled={isAnyMainServiceActionRunning || isActionRunning("clean") || displaySettings?.buttons?.clean?.enabled === false}
+                disabled={isAnyMainServiceActionRunning || isCaptureServiceActive || isActionRunning("clean") || displaySettings?.buttons?.clean?.enabled === false}
                 onClick={handleClean}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("clean")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
-                      : isAnyMainServiceActionRunning || displaySettings?.buttons?.clean?.enabled === false
+                      : isAnyMainServiceActionRunning || isCaptureServiceActive || displaySettings?.buttons?.clean?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-orange-400/40 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }

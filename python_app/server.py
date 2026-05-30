@@ -171,12 +171,8 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 pass
 
         if self.path == '/api/actions/update-db':
-            # 2.1.2 Download & extract DBs
-            success, err = system_scripts.update_databases()
-            if success:
-                self.send_json_response(200, {"success": True, "message": "Databases successfully updated and extracted."})
-            else:
-                self.send_json_response(500, {"success": False, "error": err})
+            system_scripts.schedule_update_db()
+            self.send_json_response(200, {"success": True, "message": "Обновление баз запущено в фоновом режиме."})
 
         elif self.path == '/api/actions/traffic-capture':
             # Start/Stop Capture control

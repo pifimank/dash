@@ -66,23 +66,40 @@ def download_and_extract_db(url, dest_dir, zip_filename):
 
     return True, ""
 
+_update_db_lock = threading.Lock()
+_update_db_running = False
+
 def update_databases():
     """Download and extract both DBs as specified in user criteria."""
-    url1 = PATHS["ip2location_url"]
-    dir1 = PATHS["ip2location_dir"]
-    zip1 = PATHS["ip2location_zip"]
+    global _update_db_running
+    with _update_db_lock:
+        if _update_db_running:
+            return True, ""
+        _update_db_running = True
 
-    success1, err1 = download_and_extract_db(url1, dir1, zip1)
-    if not success1:
-        return False, f"Error DB1: {err1}"
+    try:
+        url1 = PATHS["ip2location_url"]
+        dir1 = PATHS["ip2location_dir"]
+        zip1 = PATHS["ip2location_zip"]
 
-    url2 = PATHS["example_url"]
-    zip2 = PATHS["example_zip"]
-    success2, err2 = download_and_extract_db(url2, dir1, zip2)
-    if not success2:
-        return False, f"Error DB2: {err2}"
+        success1, err1 = download_and_extract_db(url1, dir1, zip1)
+        if not success1:
+            return False, f"Error DB1: {err1}"
 
-    return True, ""
+        url2 = PATHS["example_url"]
+        zip2 = PATHS["example_zip"]
+        success2, err2 = download_and_extract_db(url2, dir1, zip2)
+        if not success2:
+            return False, f"Error DB2: {err2}"
+
+        return True, ""
+    finally:
+        with _update_db_lock:
+            _update_db_running = False
+
+def is_update_db_running():
+    with _update_db_lock:
+        return _update_db_running
 
 def check_traffic_capture_status():
     """Check if traffic-capture service is active using systemctl."""
@@ -435,7 +452,7 @@ def _build_dashboard_snapshot():
     metrics["running_actions"] = {
         "packet_analysis": is_action_active("packet_analysis"),
         "dns_analysis": is_action_active("dns_analysis"),
-        "update_db": False,
+        "update_db": is_update_db_running(),
         "clean": is_clean_running(),
     }
 
@@ -532,3 +549,9 @@ def schedule_clean():
     ensure_action_worker()
     with _action_queue_lock:
         _action_queue.append(clean_directories)
+
+def schedule_update_db():
+    """Queue database update so the HTTP handler returns immediately."""
+    ensure_action_worker()
+    with _action_queue_lock:
+        _action_queue.append(update_databases)
