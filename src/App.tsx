@@ -34,6 +34,53 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { SystemMetricsResponse, SystemSettings } from "./types";
 
+const DNS_RECORD_TYPE_ORDER = ["A", "AAAA", "MX", "PTR", "SRV"] as const;
+
+function findColumnIndex(headers: string[], candidates: string[]): number {
+  const normalized = headers.map((h) => h.trim().toLowerCase());
+  for (const candidate of candidates) {
+    const idx = normalized.indexOf(candidate.toLowerCase());
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+function normalizeDnsRecordType(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function sortDnsRows(rows: string[][], headers: string[]): string[][] {
+  const typeCol = findColumnIndex(headers, ["query type", "type", "qtype", "record type", "тип"]);
+  const domainCol = findColumnIndex(headers, ["domain", "name", "hostname", "домен"]);
+
+  if (typeCol < 0) {
+    return rows;
+  }
+
+  return [...rows].sort((a, b) => {
+    const typeA = normalizeDnsRecordType(a[typeCol] ?? "");
+    const typeB = normalizeDnsRecordType(b[typeCol] ?? "");
+
+    const priorityA = DNS_RECORD_TYPE_ORDER.indexOf(typeA as (typeof DNS_RECORD_TYPE_ORDER)[number]);
+    const priorityB = DNS_RECORD_TYPE_ORDER.indexOf(typeB as (typeof DNS_RECORD_TYPE_ORDER)[number]);
+    const rankA = priorityA >= 0 ? priorityA : DNS_RECORD_TYPE_ORDER.length;
+    const rankB = priorityB >= 0 ? priorityB : DNS_RECORD_TYPE_ORDER.length;
+
+    if (rankA !== rankB) return rankA - rankB;
+    if (rankA === DNS_RECORD_TYPE_ORDER.length && typeA !== typeB) {
+      return typeA.localeCompare(typeB);
+    }
+
+    if (domainCol >= 0) {
+      const domainA = (a[domainCol] ?? "").toLowerCase();
+      const domainB = (b[domainCol] ?? "").toLowerCase();
+      if (domainA !== domainB) return domainA.localeCompare(domainB);
+    }
+
+    return a.join("\0").localeCompare(b.join("\0"));
+  });
+}
+
 /// --- CSV TABLE VIEW COMPONENT ---
 function ReportTable({ type }: { type: "ip" | "dns" }) {
   const [data, setData] = useState<string[][]>([]);
@@ -69,7 +116,7 @@ function ReportTable({ type }: { type: "ip" | "dns" }) {
   const headers = data.length > 0 ? data[0] : [];
   const rows = data.length > 1 ? data.slice(1) : [];
 
-  // Sort rows: records with fewer N/A count are sorted first (rise to the top)
+  // Sort rows: DNS by record type groups; IP by fewest N/A values first
   const countNA = (row: string[]) => {
     return row.filter(val => {
       if (!val) return true;
@@ -77,7 +124,10 @@ function ReportTable({ type }: { type: "ip" | "dns" }) {
       return s === "N/A" || s === "NA" || s === "-" || s === "" || s === "NULL" || s === "NONE";
     }).length;
   };
-  const sortedRows = [...rows].sort((a, b) => countNA(a) - countNA(b));
+  const sortedRows =
+    type === "dns"
+      ? sortDnsRows(rows, headers)
+      : [...rows].sort((a, b) => countNA(a) - countNA(b));
 
   // Filter rows based on search
   const filteredRows = sortedRows.filter((row) =>
