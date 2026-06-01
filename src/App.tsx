@@ -542,10 +542,10 @@ export default function App() {
     }
   };
 
-  // Download available: /tmp ip2loc_report.* or dns_report.* or /mnt/pcaps capture.*
-  const logsExist =
-    metrics?.download_available === true ||
-    (metrics?.log_files_available?.length ?? 0) > 0;
+  // Download available: /tmp ip2loc_report.* or dns_report.* or /mnt/pcaps capture*
+  const downloadFileCount = metrics?.log_files_available?.length ?? 0;
+  const logsExist = Boolean(metrics?.download_available) || downloadFileCount > 0;
+  const downloadBlockedByTask = logsExist && isPanelLocked;
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-805 pb-20 font-sans relative antialiased leading-relaxed select-text">
@@ -1167,7 +1167,9 @@ export default function App() {
                 onClick={handleDownloadLogs}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
-                    !logsExist || isPanelLocked || displaySettings?.buttons?.download_logs?.enabled === false
+                    downloadBlockedByTask
+                      ? "bg-amber-50/80 border-amber-200 text-amber-800 cursor-not-allowed opacity-80"
+                      : !logsExist || displaySettings?.buttons?.download_logs?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
@@ -1175,13 +1177,17 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Download className={`w-4 h-4 ${!logsExist ? "text-slate-400" : "text-blue-500 animate-bounce"}`} />
+                    <Download className={`w-4 h-4 ${logsExist && !isPanelLocked ? "text-blue-500 animate-bounce" : downloadBlockedByTask ? "text-amber-600" : "text-slate-400"}`} />
                   </span>
                 </div>
                 <div>
                   <span className="block font-bold">{displaySettings?.buttons?.download_logs?.label || "Скачать логи"}</span>
                   <span className="text-[11px] text-slate-400 font-normal mt-0.5 block">
-                    {logsExist ? "ZIP: /tmp ip2loc_report.*, dns_report.* + /mnt/pcaps capture.*" : "Нет файлов для скачивания"}
+                    {!logsExist
+                      ? "Нет файлов: /tmp ip2loc_report.*, dns_report.* или /mnt/pcaps/capture*"
+                      : downloadBlockedByTask
+                      ? `Найдено ${downloadFileCount} файл(ов). Доступно после завершения задачи`
+                      : `Скачать ${downloadFileCount} файл(ов) в ZIP`}
                   </span>
                 </div>
               </button>

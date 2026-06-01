@@ -87,13 +87,17 @@ async function startServer() {
 
   const collectDownloadFiles = (): string[] => {
     const files: string[] = [];
+    const matchName = (name: string, pattern: string) => {
+      const re = new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$");
+      return re.test(name);
+    };
+
     try {
       for (const name of fs.readdirSync(tmpDir)) {
-        if (name.startsWith("ip2loc_report.") || name.startsWith("dns_report.")) {
-          const fullPath = path.join(tmpDir, name);
-          if (fs.statSync(fullPath).isFile()) {
-            files.push(name);
-          }
+        const fullPath = path.join(tmpDir, name);
+        if (!fs.statSync(fullPath).isFile()) continue;
+        if (matchName(name, "ip2loc_report.*") || matchName(name, "dns_report.*")) {
+          files.push(name);
         }
       }
     } catch (e) {}
@@ -102,11 +106,10 @@ async function startServer() {
       const pcapDir = "/mnt/pcaps";
       if (fs.existsSync(pcapDir)) {
         for (const name of fs.readdirSync(pcapDir)) {
-          if (name.startsWith("capture.")) {
-            const fullPath = path.join(pcapDir, name);
-            if (fs.statSync(fullPath).isFile()) {
-              files.push(path.join("pcaps", name));
-            }
+          const fullPath = path.join(pcapDir, name);
+          if (!fs.statSync(fullPath).isFile()) continue;
+          if (matchName(name, "capture*")) {
+            files.push(path.join("pcaps", name));
           }
         }
       }

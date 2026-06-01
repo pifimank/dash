@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import glob
+import fnmatch
 import time
 import shlex
 import shutil
@@ -159,37 +160,46 @@ def is_clean_running():
     with _clean_lock:
         return _clean_running
 
-LOG_REPORT_GLOBS = ["ip2loc_report.*", "dns_report.*"]
-PCAP_GLOB = "capture.*"
+LOG_REPORT_PATTERNS = ["ip2loc_report.*", "dns_report.*"]
+PCAP_PATTERNS = ["capture*"]
+
+def _list_files_matching(directory, patterns):
+    """List regular files in directory whose basename matches any fnmatch pattern."""
+    if not os.path.isdir(directory):
+        return []
+    matched = []
+    try:
+        for name in os.listdir(directory):
+            path = os.path.join(directory, name)
+            if not os.path.isfile(path):
+                continue
+            if any(fnmatch.fnmatch(name, pattern) for pattern in patterns):
+                matched.append(path)
+    except OSError:
+        return []
+    return sorted(matched)
 
 def _collect_download_archive_entries():
-    """Collect ip2loc_report.* / dns_report.* from /tmp and capture.* from /mnt/pcaps."""
+    """Collect ip2loc_report.* / dns_report.* from /tmp and capture* from /mnt/pcaps."""
     entries = []
     seen = set()
 
-    tmp_dir = PATHS["tmp_dir"]
-    for pattern in LOG_REPORT_GLOBS:
-        for file_path in glob.glob(os.path.join(tmp_dir, pattern)):
-            if not os.path.isfile(file_path):
-                continue
-            arcname = os.path.basename(file_path)
-            key = ("report", arcname)
-            if key in seen:
-                continue
-            seen.add(key)
-            entries.append((file_path, arcname))
+    for file_path in _list_files_matching(PATHS["tmp_dir"], LOG_REPORT_PATTERNS):
+        arcname = os.path.basename(file_path)
+        key = ("report", arcname)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append((file_path, arcname))
 
     pcap_dir = PATHS.get("pcap_dir", "/mnt/pcaps")
-    if os.path.isdir(pcap_dir):
-        for file_path in glob.glob(os.path.join(pcap_dir, PCAP_GLOB)):
-            if not os.path.isfile(file_path):
-                continue
-            arcname = os.path.join("pcaps", os.path.basename(file_path))
-            key = ("pcap", arcname)
-            if key in seen:
-                continue
-            seen.add(key)
-            entries.append((file_path, arcname))
+    for file_path in _list_files_matching(pcap_dir, PCAP_PATTERNS):
+        arcname = os.path.join("pcaps", os.path.basename(file_path))
+        key = ("pcap", arcname)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append((file_path, arcname))
 
     return entries
 
@@ -205,7 +215,7 @@ def create_logs_zip(zip_path):
     """Build ZIP archive with reports and pcap files."""
     entries = _collect_download_archive_entries()
     if not entries:
-        return False, "No matching files found: /tmp/ip2loc_report.*, /tmp/dns_report.*, /mnt/pcaps/capture.*"
+        return False, "No matching files found: /tmp/ip2loc_report.*, /tmp/dns_report.*, /mnt/pcaps/capture*"
 
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -553,12 +563,15 @@ def ensure_metrics_collector():
     threading.Thread(target=_metrics_collector_loop, daemon=True, name="metrics-collector").start()
 
 def get_dashboard_metrics():
-    """Return cached dashboard metrics instantly (updated in background)."""
+    """Return cached dashboard metrics; download availability is always refreshed."""
     ensure_metrics_collector()
     with _metrics_cache_lock:
-        if _metrics_cache:
-            return dict(_metrics_cache)
-    return _build_dashboard_snapshot()
+        metrics = dict(_metrics_cache) if _metrics_cache else _build_dashboard_snapshot()
+
+    download_files = list_download_files()
+    metrics["log_files_available"] = download_files
+    metrics["download_available"] = len(download_files) > 0
+    return metrics
 
 _action_queue = []
 _action_queue_lock = threading.Lock()
