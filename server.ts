@@ -108,7 +108,7 @@ async function startServer() {
         for (const name of fs.readdirSync(pcapDir)) {
           const fullPath = path.join(pcapDir, name);
           if (!fs.statSync(fullPath).isFile()) continue;
-          if (matchName(name, "capture*")) {
+          if (matchName(name, "capture.*") || matchName(name, "capture*")) {
             files.push(path.join("pcaps", name));
           }
         }

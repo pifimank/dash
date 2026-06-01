@@ -161,7 +161,7 @@ def is_clean_running():
         return _clean_running
 
 LOG_REPORT_PATTERNS = ["ip2loc_report.*", "dns_report.*"]
-PCAP_PATTERNS = ["capture*"]
+PCAP_PATTERNS = ["capture.*", "capture*"]
 
 def _list_files_matching(directory, patterns):
     """List regular files in directory whose basename matches any fnmatch pattern."""
