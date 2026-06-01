@@ -44,7 +44,6 @@ export interface SystemSettings {
     update_db: ButtonConfig;
     traffic_capture: ButtonConfig;
     packet_analysis: ButtonConfig;
-    dns_analysis: ButtonConfig;
     ip_addresses: ButtonConfig;
     dns_records: ButtonConfig;
     download_logs: ButtonConfig;

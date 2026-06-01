@@ -285,8 +285,7 @@ export default function App() {
   const isAnyMainServiceActionRunning = MAIN_SERVICE_ACTION_KEYS.some((key) => isActionRunning(key));
   const isPcapAnalysisRunning =
     isActionRunning("pcap_analysis") ||
-    isActionRunning("packet_analysis") ||
-    isActionRunning("dns_analysis");
+    isActionRunning("packet_analysis");
   // Busy: update DB, traffic capture (incl. active service), packet/DNS analysis
   const isMainServiceBusy = isAnyMainServiceActionRunning || isCaptureServiceActive;
   // Lock panel while a main action runs, clean runs, or packet capture service is active
@@ -1077,45 +1076,6 @@ export default function App() {
               </button>
             )}
 
-            {/* --- 2.4 DNS ANALYSIS BUTTON --- */}
-            {displaySettings?.buttons?.dns_analysis?.visible !== false && (
-              <button
-                disabled={
-                  (!analysisEnabled && !isPcapAnalysisRunning) ||
-                  displaySettings?.buttons?.dns_analysis?.enabled === false
-                }
-                onClick={handlePcapAnalysis}
-                className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
-                  ${
-                    isPcapAnalysisRunning
-                      ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
-                      : !analysisEnabled || displaySettings?.buttons?.dns_analysis?.enabled === false
-                      ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
-                      : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-808 hover:border-[#10b981]/40 hover:translate-y-[-2px] shadow-sm cursor-pointer"
-                  }
-                `}
-              >
-                <div className="flex justify-between w-full">
-                  <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Activity className={`w-4 h-4 ${isPcapAnalysisRunning ? "text-white" : pcapFilesExist ? "text-teal-500" : "text-slate-400"}`} />
-                  </span>
-                  {isPcapAnalysisRunning && (
-                    <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
-                  )}
-                </div>
-                <div>
-                  <span className="block font-bold text-slate-800">{displaySettings?.buttons?.dns_analysis?.label || "Анализ ДНС"}</span>
-                  <span className="text-[11px] text-slate-405 font-normal mt-0.5 block font-sans">
-                    {isPcapAnalysisRunning
-                      ? "getipdns.sh..."
-                      : pcapFilesExist
-                      ? "IP + DNS (getipdns.sh)"
-                      : "Нет pcap в /mnt/pcaps (capture*)"}
-                  </span>
-                </div>
-              </button>
-            )}
-
             {/* --- 2.5 IP ADDRESSES TABLE --- */}
             {displaySettings?.buttons?.ip_addresses?.visible !== false && (
               <a
@@ -1354,7 +1314,6 @@ export default function App() {
                     { key: "update_db", label: "Обновить базы" },
                     { key: "traffic_capture", label: "Захват пакетов" },
                     { key: "packet_analysis", label: "Анализ пакетов" },
-                    { key: "dns_analysis", label: "Анализ ДНС" },
                     { key: "ip_addresses", label: "IP адреса" },
                     { key: "dns_records", label: "ДНС" },
                     { key: "download_logs", label: "Скачать логи" },

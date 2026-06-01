@@ -17,11 +17,6 @@
       "enabled": true,
       "label": "Анализ пакетов"
     },
-    "dns_analysis": {
-      "visible": true,
-      "enabled": true,
-      "label": "Анализ ДНС"
-    },
     "ip_addresses": {
       "visible": true,
       "enabled": true,
