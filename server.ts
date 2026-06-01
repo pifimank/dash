@@ -85,6 +85,36 @@ async function startServer() {
     }
   };
 
+  const collectDownloadFiles = (): string[] => {
+    const files: string[] = [];
+    try {
+      for (const name of fs.readdirSync(tmpDir)) {
+        if (name.startsWith("ip2loc_report.") || name.startsWith("dns_report.")) {
+          const fullPath = path.join(tmpDir, name);
+          if (fs.statSync(fullPath).isFile()) {
+            files.push(name);
+          }
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const pcapDir = "/mnt/pcaps";
+      if (fs.existsSync(pcapDir)) {
+        for (const name of fs.readdirSync(pcapDir)) {
+          if (name.startsWith("capture.")) {
+            const fullPath = path.join(pcapDir, name);
+            if (fs.statSync(fullPath).isFile()) {
+              files.push(path.join("pcaps", name));
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    return files;
+  };
+
   // Serve API routes first
   app.get("/api/metrics", (req, res) => {
     // Generate realistic simulated statistics for the AI Studio live preview
@@ -152,7 +182,7 @@ async function startServer() {
       ip_report_exists: ipReportExists,
       dns_report_exists: dnsReportExists,
       capture_files_exist: captureFilesExist,
-      log_files_available: ["ip2loc_report.csv", "ip2loc_report.txt", "dns_report.csv"],
+      log_files_available: collectDownloadFiles(),
       settings: getSettings(),
       paths: {
         ip2location_url: "https://www.ip2location.com/download?token=EScQtt2L2hVy4ya8vnFvaWh8ixG4gnORKLaefL9Gz9x9RlGVTV265eSK6pc1M00V&file=DBASNLITEBINIPV6",
@@ -161,6 +191,7 @@ async function startServer() {
         example_url: "https://www.example.com/download?token=EScQtt2L2hVy4ya8vnFvaWh8ixG4gnORKLaefL9Gz9x9RlGVTV265eSK6pc1M00V&file=DBASNLITEBINIPV6",
         example_zip: "ip-to-asn.mmdb.ZIP",
         tmp_dir: "/tmp",
+        pcap_dir: "/mnt/pcaps",
         as_report_script: "/usr/local/bin/as_report.sh",
         dns_report_script: "/usr/local/bin/getdns.sh",
         ip2loc_report_csv: "/tmp/ip2loc_report.csv",

@@ -159,6 +159,58 @@ def is_clean_running():
     with _clean_lock:
         return _clean_running
 
+LOG_REPORT_GLOBS = ["ip2loc_report.*", "dns_report.*"]
+PCAP_GLOB = "capture.*"
+
+def _collect_download_archive_entries():
+    """Collect ip2loc_report.* / dns_report.* from /tmp and capture.* from /mnt/pcaps."""
+    entries = []
+    seen = set()
+
+    tmp_dir = PATHS["tmp_dir"]
+    for pattern in LOG_REPORT_GLOBS:
+        for file_path in glob.glob(os.path.join(tmp_dir, pattern)):
+            if not os.path.isfile(file_path):
+                continue
+            arcname = os.path.basename(file_path)
+            key = ("report", arcname)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append((file_path, arcname))
+
+    pcap_dir = PATHS.get("pcap_dir", "/mnt/pcaps")
+    if os.path.isdir(pcap_dir):
+        for file_path in glob.glob(os.path.join(pcap_dir, PCAP_GLOB)):
+            if not os.path.isfile(file_path):
+                continue
+            arcname = os.path.join("pcaps", os.path.basename(file_path))
+            key = ("pcap", arcname)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append((file_path, arcname))
+
+    return entries
+
+def list_download_files():
+    """Return archive entry names available for download."""
+    return [arcname for _, arcname in _collect_download_archive_entries()]
+
+def create_logs_zip(zip_path):
+    """Build ZIP archive with reports and pcap files."""
+    entries = _collect_download_archive_entries()
+    if not entries:
+        return False, "No matching files found: /tmp/ip2loc_report.*, /tmp/dns_report.*, /mnt/pcaps/capture.*"
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for file_path, arcname in entries:
+                zip_file.write(file_path, arcname)
+        return True, ""
+    except Exception as e:
+        return False, f"Failed to build zip: {e}"
+
 def ya_reboot():
     """Reboot the operating system immediately."""
     _, stderr, code = run_command(["shutdown", "-r", "now"])
@@ -457,11 +509,7 @@ def _build_dashboard_snapshot():
     }
 
     tmp_dir = PATHS["tmp_dir"]
-    log_files = []
-    for pattern in ["*dns_report*", "*ip2loc_report*"]:
-        for file_path in glob.glob(os.path.join(tmp_dir, pattern)):
-            log_files.append(os.path.basename(file_path))
-    metrics["log_files_available"] = list(set(log_files))
+    metrics["log_files_available"] = list_download_files()
 
     try:
         with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:

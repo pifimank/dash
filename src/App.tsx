@@ -543,7 +543,7 @@ export default function App() {
   };
 
   // Check if any log is present
-  const logsExist = metrics?.ip_report_exists || metrics?.dns_report_exists;
+  const logsExist = (metrics?.log_files_available?.length ?? 0) > 0;
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-805 pb-20 font-sans relative antialiased leading-relaxed select-text">
@@ -1179,7 +1179,7 @@ export default function App() {
                 <div>
                   <span className="block font-bold">{displaySettings?.buttons?.download_logs?.label || "Скачать логи"}</span>
                   <span className="text-[11px] text-slate-400 font-normal mt-0.5 block">
-                    {logsExist ? "Загрузить ZIP отчеты из /tmp" : "Отсутствуют файлы отчетов"}
+                    {logsExist ? "ZIP: /tmp ip2loc_report.*, dns_report.* + /mnt/pcaps capture.*" : "Нет файлов для скачивания"}
                   </span>
                 </div>
               </button>

@@ -1,8 +1,6 @@
 import sys
 import os
 import json
-import zipfile
-import glob
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 import socket
@@ -120,35 +118,23 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_json_response(500, {"error": str(e)})
 
         elif self.path == '/api/download/logs':
-            # Create live ZIP download of logs containing dns_report or ip2loc_report
             tmp_dir = system_scripts.PATHS["tmp_dir"]
             zip_path = os.path.join(tmp_dir, "system_reports.zip")
-            
-            logs_to_zip = []
-            for pattern in ["*dns_report*", "*ip2loc_report*"]:
-                for f in glob.glob(os.path.join(tmp_dir, pattern)):
-                    logs_to_zip.append(f)
-            
-            if not logs_to_zip:
-                self.send_json_response(404, {"error": "No matching log files found in /tmp to download"})
+
+            success, err = system_scripts.create_logs_zip(zip_path)
+            if not success:
+                self.send_json_response(404, {"error": err})
                 return
-                
+
             try:
-                # Build zip
-                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                    for f in logs_to_zip:
-                        zip_file.write(f, os.path.basename(f))
-                
-                # Read zip bytes and stream
                 with open(zip_path, 'rb') as f:
                     zip_data = f.read()
-                
-                # Cleanup file after reading
+
                 try:
                     os.remove(zip_path)
                 except Exception:
                     pass
-                
+
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/zip')
                 self.send_header('Content-Disposition', 'attachment; filename="system_reports.zip"')
@@ -156,7 +142,7 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(zip_data)
             except Exception as e:
-                self.send_json_response(500, {"error": f"Failed to build zip: {str(e)}"})
+                self.send_json_response(500, {"error": f"Failed to read zip: {str(e)}"})
         else:
             self.send_json_response(404, {"error": "Route not found"})
 
