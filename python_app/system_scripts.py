@@ -105,6 +105,17 @@ def is_update_db_running():
     with _update_db_lock:
         return _update_db_running
 
+def is_main_service_busy():
+    """True while update DB, traffic capture, or packet/DNS analysis is running."""
+    if is_update_db_running():
+        return True
+    if check_traffic_capture_status():
+        return True
+    for key in ("packet_analysis", "dns_analysis"):
+        if is_action_active(key):
+            return True
+    return False
+
 def check_traffic_capture_status():
     """Check if traffic-capture service is active using systemctl."""
     stdout, _, _ = run_command(["systemctl", "is-active", "traffic-capture"])

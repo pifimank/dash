@@ -124,6 +124,13 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_json_response(500, {"error": str(e)})
 
         elif self.path == '/api/download/logs':
+            if system_scripts.is_main_service_busy():
+                self.send_json_response(
+                    503,
+                    {"error": "Скачивание недоступно, пока выполняется основная задача"},
+                )
+                return
+
             tmp_dir = system_scripts.PATHS["tmp_dir"]
             zip_path = os.path.join(tmp_dir, "system_reports.zip")
 

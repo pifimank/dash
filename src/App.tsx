@@ -283,8 +283,10 @@ export default function App() {
 
   const isCaptureServiceActive = metrics?.traffic_capture_active === true;
   const isAnyMainServiceActionRunning = MAIN_SERVICE_ACTION_KEYS.some((key) => isActionRunning(key));
+  // Busy: update DB, traffic capture (incl. active service), packet/DNS analysis
+  const isMainServiceBusy = isAnyMainServiceActionRunning || isCaptureServiceActive;
   // Lock panel while a main action runs, clean runs, or packet capture service is active
-  const isPanelLocked = isAnyMainServiceActionRunning || isActionRunning("clean") || isCaptureServiceActive;
+  const isPanelLocked = isMainServiceBusy || isActionRunning("clean");
   // Allow stopping capture while service is active — only this button stays clickable
   const isTrafficCaptureClickable =
     displaySettings?.buttons?.traffic_capture?.enabled !== false &&
@@ -513,6 +515,7 @@ export default function App() {
 
   // Log Zip Downloader
   const handleDownloadLogs = () => {
+    if (!downloadEnabled) return;
     window.location.href = "/api/download/logs";
   };
 
@@ -547,10 +550,14 @@ export default function App() {
     }
   };
 
-  // Download available: independent of analysis/capture tasks — only file presence matters
+  // Download: files must exist and no main service task (update/capture/analysis) running
   const downloadFileCount = metrics?.log_files_available?.length ?? 0;
   const logsExist = metrics?.download_available === true || downloadFileCount > 0;
-  const downloadEnabled = logsExist && displaySettings?.buttons?.download_logs?.enabled !== false;
+  const downloadBlockedByMainTasks = logsExist && isMainServiceBusy;
+  const downloadEnabled =
+    logsExist &&
+    !isMainServiceBusy &&
+    displaySettings?.buttons?.download_logs?.enabled !== false;
   const analysisEnabled = (key: "packet_analysis" | "dns_analysis") =>
     pcapFilesExist &&
     displaySettings?.buttons?.[key]?.enabled !== false &&
@@ -1176,7 +1183,9 @@ export default function App() {
                 onClick={handleDownloadLogs}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
-                    !downloadEnabled
+                    downloadBlockedByMainTasks
+                      ? "bg-amber-50/80 border-amber-200 text-amber-800 cursor-not-allowed opacity-80"
+                      : !downloadEnabled
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
@@ -1184,7 +1193,7 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Download className={`w-4 h-4 ${downloadEnabled ? "text-blue-500 animate-bounce" : "text-slate-400"}`} />
+                    <Download className={`w-4 h-4 ${downloadEnabled ? "text-blue-500 animate-bounce" : downloadBlockedByMainTasks ? "text-amber-600" : "text-slate-400"}`} />
                   </span>
                 </div>
                 <div>
@@ -1192,6 +1201,8 @@ export default function App() {
                   <span className="text-[11px] text-slate-400 font-normal mt-0.5 block">
                     {!logsExist
                       ? "Нет файлов: /tmp ip2loc_report.*, dns_report.* или /mnt/pcaps/capture*"
+                      : downloadBlockedByMainTasks
+                      ? "Доступно после завершения основной задачи"
                       : `Скачать ${downloadFileCount} файл(ов) в ZIP`}
                   </span>
                 </div>
