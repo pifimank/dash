@@ -542,8 +542,10 @@ export default function App() {
     }
   };
 
-  // Check if any log is present
-  const logsExist = (metrics?.log_files_available?.length ?? 0) > 0;
+  // Download available: /tmp ip2loc_report.* or dns_report.* or /mnt/pcaps capture.*
+  const logsExist =
+    metrics?.download_available === true ||
+    (metrics?.log_files_available?.length ?? 0) > 0;
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-805 pb-20 font-sans relative antialiased leading-relaxed select-text">

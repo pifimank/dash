@@ -183,6 +183,7 @@ async function startServer() {
       dns_report_exists: dnsReportExists,
       capture_files_exist: captureFilesExist,
       log_files_available: collectDownloadFiles(),
+      download_available: collectDownloadFiles().length > 0,
       settings: getSettings(),
       paths: {
         ip2location_url: "https://www.ip2location.com/download?token=EScQtt2L2hVy4ya8vnFvaWh8ixG4gnORKLaefL9Gz9x9RlGVTV265eSK6pc1M00V&file=DBASNLITEBINIPV6",

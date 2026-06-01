@@ -197,6 +197,10 @@ def list_download_files():
     """Return archive entry names available for download."""
     return [arcname for _, arcname in _collect_download_archive_entries()]
 
+def has_download_files():
+    """True if any ip2loc_report.*, dns_report.* or /mnt/pcaps/capture.* files exist."""
+    return len(_collect_download_archive_entries()) > 0
+
 def create_logs_zip(zip_path):
     """Build ZIP archive with reports and pcap files."""
     entries = _collect_download_archive_entries()
@@ -508,8 +512,9 @@ def _build_dashboard_snapshot():
         "clean": is_clean_running(),
     }
 
-    tmp_dir = PATHS["tmp_dir"]
-    metrics["log_files_available"] = list_download_files()
+    download_files = list_download_files()
+    metrics["log_files_available"] = download_files
+    metrics["download_available"] = len(download_files) > 0
 
     try:
         with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
