@@ -185,19 +185,19 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json_response(500, {"success": False, "error": err})
 
-        elif self.path == '/api/actions/packet-analysis':
+        elif self.path in (
+            '/api/actions/pcap-analysis',
+            '/api/actions/packet-analysis',
+            '/api/actions/dns-analysis',
+        ):
             if not system_scripts.has_pcap_files():
                 self.send_json_response(400, {"success": False, "error": "Нет pcap-файлов в /mnt/pcaps (capture*)"})
                 return
-            system_scripts.schedule_as_report()
-            self.send_json_response(200, {"success": True, "message": "Анализ пакетов запущен в фоновом режиме."})
-
-        elif self.path == '/api/actions/dns-analysis':
-            if not system_scripts.has_pcap_files():
-                self.send_json_response(400, {"success": False, "error": "Нет pcap-файлов в /mnt/pcaps (capture*)"})
+            if system_scripts.is_pcap_analysis_running():
+                self.send_json_response(200, {"success": True, "message": "Анализ IP и DNS уже выполняется."})
                 return
-            system_scripts.schedule_dns_report()
-            self.send_json_response(200, {"success": True, "message": "Анализ ДНС запущен в фоновом режиме."})
+            system_scripts.schedule_combined_pcap_analysis()
+            self.send_json_response(200, {"success": True, "message": "Анализ IP и DNS запущен (getipdns.sh)."})
 
         elif self.path == '/api/actions/clean':
             system_scripts.schedule_clean()

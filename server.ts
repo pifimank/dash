@@ -66,8 +66,7 @@ async function startServer() {
   let trafficCaptureActive = false;
   let dbSimulatedError = false;
   let updateDbActive = false;
-  let packetAnalysisActive = false;
-  let dnsAnalysisActive = false;
+  let pcapAnalysisActive = false;
   let cleanActive = false;
   const killedPids = new Set<string>();
 
@@ -180,8 +179,9 @@ async function startServer() {
         { pid: "24412", cpu: "0.2", mem: "0.5", name: "bash" }
       ].filter(p => !killedPids.has(p.pid) && p.name !== "ps"),
       running_actions: {
-        packet_analysis: packetAnalysisActive,
-        dns_analysis: dnsAnalysisActive,
+        pcap_analysis: pcapAnalysisActive,
+        packet_analysis: pcapAnalysisActive,
+        dns_analysis: pcapAnalysisActive,
         update_db: updateDbActive,
         clean: cleanActive,
       },
@@ -200,8 +200,7 @@ async function startServer() {
         example_zip: "ip-to-asn.mmdb.ZIP",
         tmp_dir: "/tmp",
         pcap_dir: "/mnt/pcaps",
-        as_report_script: "/usr/local/bin/as_report.sh",
-        dns_report_script: "/usr/local/bin/getdns.sh",
+        pcap_analysis_script: "/usr/local/bin/getipdns.sh",
         ip2loc_report_csv: "/tmp/ip2loc_report.csv",
         dns_report_csv: "/tmp/dns_report.csv"
       }
@@ -271,43 +270,46 @@ async function startServer() {
     });
   };
 
-  app.post("/api/actions/packet-analysis", async (req, res) => {
+  const startCombinedPcapAnalysis = (req: express.Request, res: express.Response) => {
     if (!hasPcapFiles()) {
       return res.status(400).json({ success: false, error: "Нет pcap-файлов в /mnt/pcaps (capture*)" });
     }
-    if (fs.existsSync("/usr/local/bin/as_report.sh")) {
-      packetAnalysisActive = true;
-      res.json({ success: true, message: "Анализ пакетов запущен в фоновом режиме." });
-      exec("/usr/local/bin/as_report.sh", (error) => {
-        packetAnalysisActive = false;
-      });
-    } else {
-      packetAnalysisActive = true;
-      res.json({ success: true, message: "Анализ пакетов запущен в фоновом режиме." });
-      setTimeout(() => {
-        packetAnalysisActive = false;
-      }, 12000);
+    if (pcapAnalysisActive) {
+      return res.json({ success: true, message: "Анализ IP и DNS уже выполняется." });
     }
-  });
 
-  app.post("/api/actions/dns-analysis", async (req, res) => {
-    if (!hasPcapFiles()) {
-      return res.status(400).json({ success: false, error: "Нет pcap-файлов в /mnt/pcaps (capture*)" });
-    }
-    if (fs.existsSync("/usr/local/bin/getdns.sh")) {
-      dnsAnalysisActive = true;
-      res.json({ success: true, message: "Анализ ДНС запущен в фоновом режиме." });
-      exec("/usr/local/bin/getdns.sh", (error) => {
-        dnsAnalysisActive = false;
+    pcapAnalysisActive = true;
+    res.json({ success: true, message: "Анализ IP и DNS запущен (getipdns.sh)." });
+
+    const script = "/usr/local/bin/getipdns.sh";
+    const localScript = path.join(process.cwd(), "getipdns.sh");
+
+    if (fs.existsSync(script)) {
+      exec(script, () => {
+        pcapAnalysisActive = false;
       });
-    } else {
-      dnsAnalysisActive = true;
-      res.json({ success: true, message: "Анализ ДНС запущен в фоновом режиме." });
-      setTimeout(() => {
-        dnsAnalysisActive = false;
-      }, 15000);
+      return;
     }
-  });
+
+    if (fs.existsSync(localScript)) {
+      exec(`bash ${localScript}`, () => {
+        pcapAnalysisActive = false;
+      });
+      return;
+    }
+
+    setTimeout(() => {
+      pcapAnalysisActive = false;
+    }, 20000);
+  };
+
+  for (const route of [
+    "/api/actions/pcap-analysis",
+    "/api/actions/packet-analysis",
+    "/api/actions/dns-analysis",
+  ]) {
+    app.post(route, startCombinedPcapAnalysis);
+  }
 
   app.post("/api/actions/kill-process", (req, res) => {
     const { pid } = req.body;

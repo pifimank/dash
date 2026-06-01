@@ -17,7 +17,7 @@ with open(PATHS_FILE, 'r') as f:
     PATHS = json.load(f)
 
 # Bump when deploying — visible in /api/metrics to confirm live code version
-DASHBOARD_BUILD_ID = "20260601-pcap-download-v3"
+DASHBOARD_BUILD_ID = "20260601-getipdns-v1"
 
 _SETTINGS_FILE = os.path.join(os.path.dirname(__file__), 'settings.json')
 _PATHS_FILE = PATHS_FILE
@@ -111,9 +111,8 @@ def is_main_service_busy():
         return True
     if check_traffic_capture_status():
         return True
-    for key in ("packet_analysis", "dns_analysis"):
-        if is_action_active(key):
-            return True
+    if is_pcap_analysis_running():
+        return True
     return False
 
 def check_traffic_capture_status():
@@ -296,8 +295,7 @@ def ya_reboot():
 
 # --- Background analysis jobs (tracked by PID, not Popen) ---
 _active_pids = {
-    "packet_analysis": None,
-    "dns_analysis": None,
+    "pcap_analysis": None,
 }
 _process_lock = threading.Lock()
 _spawn_lock = threading.Lock()
@@ -313,18 +311,14 @@ def _is_pid_active_unlocked(key):
         _active_pids[key] = None
         return False
 
-def _start_background_script(key, script_path, fallback_sleep):
-    """Launch a shell script fully detached from the web server process."""
+def _start_background_shell(key, shell_body):
+    """Launch a shell command fully detached from the web server process."""
     with _process_lock:
         if _is_pid_active_unlocked(key):
             return True, ""
 
-    if os.path.exists(script_path):
-        launch_cmd = f"nohup /bin/bash {shlex.quote(script_path)} >/dev/null 2>&1 & echo $!"
-    else:
-        launch_cmd = f"sleep {fallback_sleep} & echo $!"
+    launch_cmd = f"nohup bash -c {shlex.quote(shell_body)} >/dev/null 2>&1 & echo $!"
 
-    # Serialize fork/spawn so it never races with other threads in the process.
     with _spawn_lock:
         result = subprocess.run(
             launch_cmd,
@@ -343,24 +337,25 @@ def _start_background_script(key, script_path, fallback_sleep):
         _active_pids[key] = pid
     return True, ""
 
-def run_as_report_async():
-    """Run packet analysis command asynchronously in background."""
-    return _start_background_script(
-        "packet_analysis",
-        PATHS["as_report_script"],
-        fallback_sleep=12,
-    )
+def _script_cmd(script_path, fallback_sleep):
+    if os.path.exists(script_path):
+        return f"/bin/bash {shlex.quote(script_path)}"
+    return f"sleep {fallback_sleep}"
 
-def run_dns_report_async():
-    """Run DNS analysis command asynchronously in background."""
-    return _start_background_script(
-        "dns_analysis",
-        PATHS["dns_report_script"],
-        fallback_sleep=15,
-    )
+def run_combined_pcap_analysis_async():
+    """Run combined IP + DNS analysis via getipdns.sh."""
+    script_path = PATHS.get("pcap_analysis_script", "/usr/local/bin/getipdns.sh")
+    shell_body = _script_cmd(script_path, 20)
+    return _start_background_shell("pcap_analysis", shell_body)
+
+def is_pcap_analysis_running():
+    with _process_lock:
+        return _is_pid_active_unlocked("pcap_analysis")
 
 def is_action_active(key):
     """Check if process is active."""
+    if key in ("packet_analysis", "dns_analysis", "pcap_analysis"):
+        return is_pcap_analysis_running()
     with _process_lock:
         return _is_pid_active_unlocked(key)
 
@@ -577,9 +572,11 @@ def _build_dashboard_snapshot():
     metrics["traffic_capture_active"] = check_traffic_capture_status()
     metrics["ip_report_exists"] = os.path.exists(PATHS["ip2loc_report_csv"])
     metrics["dns_report_exists"] = os.path.exists(PATHS["dns_report_csv"])
+    pcap_running = is_pcap_analysis_running()
     metrics["running_actions"] = {
-        "packet_analysis": is_action_active("packet_analysis"),
-        "dns_analysis": is_action_active("dns_analysis"),
+        "pcap_analysis": pcap_running,
+        "packet_analysis": pcap_running,
+        "dns_analysis": pcap_running,
         "update_db": is_update_db_running(),
         "clean": is_clean_running(),
     }
@@ -685,17 +682,19 @@ def ensure_action_worker():
     _action_worker_started = True
     threading.Thread(target=_action_worker_loop, daemon=True, name="action-worker").start()
 
-def schedule_as_report():
-    """Queue packet analysis so the HTTP handler returns immediately."""
+def schedule_combined_pcap_analysis():
+    """Queue combined IP + DNS pcap analysis (parallel scripts)."""
     ensure_action_worker()
     with _action_queue_lock:
-        _action_queue.append(run_as_report_async)
+        _action_queue.append(run_combined_pcap_analysis_async)
+
+def schedule_as_report():
+    """Backward-compatible alias for combined pcap analysis."""
+    schedule_combined_pcap_analysis()
 
 def schedule_dns_report():
-    """Queue DNS analysis so the HTTP handler returns immediately."""
-    ensure_action_worker()
-    with _action_queue_lock:
-        _action_queue.append(run_dns_report_async)
+    """Backward-compatible alias for combined pcap analysis."""
+    schedule_combined_pcap_analysis()
 
 def schedule_clean():
     """Queue directory cleanup so the HTTP handler returns immediately."""

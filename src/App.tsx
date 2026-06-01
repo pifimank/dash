@@ -274,8 +274,8 @@ export default function App() {
 
   const displaySettings = localSettings || metrics?.settings;
 
-  const MAIN_SERVICE_ACTION_KEYS = ["update_db", "traffic_capture", "packet_analysis", "dns_analysis"] as const;
-  const BACKGROUND_ACTION_KEYS = new Set(["update_db", "packet_analysis", "dns_analysis", "clean"]);
+  const MAIN_SERVICE_ACTION_KEYS = ["update_db", "traffic_capture", "pcap_analysis"] as const;
+  const BACKGROUND_ACTION_KEYS = new Set(["update_db", "pcap_analysis", "clean"]);
 
   const isActionRunning = (key: string) => {
     return !!(runningActions[key] || metrics?.running_actions?.[key]);
@@ -283,6 +283,10 @@ export default function App() {
 
   const isCaptureServiceActive = metrics?.traffic_capture_active === true;
   const isAnyMainServiceActionRunning = MAIN_SERVICE_ACTION_KEYS.some((key) => isActionRunning(key));
+  const isPcapAnalysisRunning =
+    isActionRunning("pcap_analysis") ||
+    isActionRunning("packet_analysis") ||
+    isActionRunning("dns_analysis");
   // Busy: update DB, traffic capture (incl. active service), packet/DNS analysis
   const isMainServiceBusy = isAnyMainServiceActionRunning || isCaptureServiceActive;
   // Lock panel while a main action runs, clean runs, or packet capture service is active
@@ -387,7 +391,7 @@ export default function App() {
     if (actionKey === "clean" && (isAnyMainServiceActionRunning || isCaptureServiceActive || isActionRunning("clean"))) {
       return;
     }
-    if ((actionKey === "packet_analysis" || actionKey === "dns_analysis") && !pcapFilesExist) {
+    if (actionKey === "pcap_analysis" && !pcapFilesExist) {
       return;
     }
     if (runningActions[actionKey]) return;
@@ -454,13 +458,9 @@ export default function App() {
     );
   };
 
-  // Run reports
-  const handlePacketAnalysis = () => {
-    runAction("packet_analysis", "/api/actions/packet-analysis");
-  };
-
-  const handleDnsAnalysis = () => {
-    runAction("dns_analysis", "/api/actions/dns-analysis");
+  // Combined IP + DNS pcap analysis (both buttons trigger the same parallel job)
+  const handlePcapAnalysis = () => {
+    runAction("pcap_analysis", "/api/actions/pcap-analysis");
   };
 
   const handleClean = () => {
@@ -558,10 +558,10 @@ export default function App() {
     logsExist &&
     !isMainServiceBusy &&
     displaySettings?.buttons?.download_logs?.enabled !== false;
-  const analysisEnabled = (key: "packet_analysis" | "dns_analysis") =>
+  const analysisEnabled =
     pcapFilesExist &&
-    displaySettings?.buttons?.[key]?.enabled !== false &&
-    !isPanelLocked;
+    !isPanelLocked &&
+    !isPcapAnalysisRunning;
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-805 pb-20 font-sans relative antialiased leading-relaxed select-text">
@@ -1041,13 +1041,16 @@ export default function App() {
             {/* --- 2.3 PACKET ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.packet_analysis?.visible !== false && (
               <button
-                disabled={!analysisEnabled("packet_analysis") && !isActionRunning("packet_analysis")}
-                onClick={handlePacketAnalysis}
+                disabled={
+                  (!analysisEnabled && !isPcapAnalysisRunning) ||
+                  displaySettings?.buttons?.packet_analysis?.enabled === false
+                }
+                onClick={handlePcapAnalysis}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
-                    isActionRunning("packet_analysis")
+                    isPcapAnalysisRunning
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
-                      : !analysisEnabled("packet_analysis")
+                      : !analysisEnabled || displaySettings?.buttons?.packet_analysis?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-blue-405 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
@@ -1055,16 +1058,20 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <FileText className={`w-4 h-4 ${isActionRunning("packet_analysis") ? "text-white" : pcapFilesExist ? "text-purple-500" : "text-slate-400"}`} />
+                    <FileText className={`w-4 h-4 ${isPcapAnalysisRunning ? "text-white" : pcapFilesExist ? "text-purple-500" : "text-slate-400"}`} />
                   </span>
-                  {isActionRunning("packet_analysis") && (
+                  {isPcapAnalysisRunning && (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
                   )}
                 </div>
                 <div>
                   <span className="block font-bold text-slate-800">{displaySettings?.buttons?.packet_analysis?.label || "Анализ пакетов"}</span>
                   <span className="text-[11px] text-slate-405 font-normal mt-0.5 block font-sans">
-                    {pcapFilesExist ? "Скрипт as_report.sh" : "Нет pcap в /mnt/pcaps (capture*)"}
+                    {isPcapAnalysisRunning
+                      ? "getipdns.sh..."
+                      : pcapFilesExist
+                      ? "IP + DNS (getipdns.sh)"
+                      : "Нет pcap в /mnt/pcaps (capture*)"}
                   </span>
                 </div>
               </button>
@@ -1073,13 +1080,16 @@ export default function App() {
             {/* --- 2.4 DNS ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.dns_analysis?.visible !== false && (
               <button
-                disabled={!analysisEnabled("dns_analysis") && !isActionRunning("dns_analysis")}
-                onClick={handleDnsAnalysis}
+                disabled={
+                  (!analysisEnabled && !isPcapAnalysisRunning) ||
+                  displaySettings?.buttons?.dns_analysis?.enabled === false
+                }
+                onClick={handlePcapAnalysis}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
-                    isActionRunning("dns_analysis")
+                    isPcapAnalysisRunning
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
-                      : !analysisEnabled("dns_analysis")
+                      : !analysisEnabled || displaySettings?.buttons?.dns_analysis?.enabled === false
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-808 hover:border-[#10b981]/40 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
@@ -1087,16 +1097,20 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Activity className={`w-4 h-4 ${isActionRunning("dns_analysis") ? "text-white" : pcapFilesExist ? "text-teal-500" : "text-slate-400"}`} />
+                    <Activity className={`w-4 h-4 ${isPcapAnalysisRunning ? "text-white" : pcapFilesExist ? "text-teal-500" : "text-slate-400"}`} />
                   </span>
-                  {isActionRunning("dns_analysis") && (
+                  {isPcapAnalysisRunning && (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
                   )}
                 </div>
                 <div>
                   <span className="block font-bold text-slate-800">{displaySettings?.buttons?.dns_analysis?.label || "Анализ ДНС"}</span>
                   <span className="text-[11px] text-slate-405 font-normal mt-0.5 block font-sans">
-                    {pcapFilesExist ? "Скрипт getdns.sh" : "Нет pcap в /mnt/pcaps (capture*)"}
+                    {isPcapAnalysisRunning
+                      ? "getipdns.sh..."
+                      : pcapFilesExist
+                      ? "IP + DNS (getipdns.sh)"
+                      : "Нет pcap в /mnt/pcaps (capture*)"}
                   </span>
                 </div>
               </button>

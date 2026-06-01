@@ -8,8 +8,7 @@
   
   "tmp_dir": "/tmp",
   "pcap_dir": "/mnt/pcaps",
-  "as_report_script": "/usr/local/bin/as_report.sh",
-  "dns_report_script": "/usr/local/bin/getdns.sh",
+  "pcap_analysis_script": "/usr/local/bin/getipdns.sh",
   
   "ip2loc_report_csv": "/tmp/ip2loc_report.csv",
   "dns_report_csv": "/tmp/dns_report.csv"
