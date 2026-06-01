@@ -24,7 +24,7 @@ async function startServer() {
     if (!fs.existsSync(pcapDir)) {
       fs.mkdirSync(pcapDir, { recursive: true });
     }
-    const samplePcapFile = path.join(pcapDir, "capture_sample.pcap");
+    const samplePcapFile = path.join(pcapDir, "capture-20260601-131232.pcap00");
     if (!fs.existsSync(samplePcapFile)) {
       fs.writeFileSync(samplePcapFile, "Pcap file content placeholder", "utf-8");
     }
@@ -108,7 +108,7 @@ async function startServer() {
         for (const name of fs.readdirSync(pcapDir)) {
           const fullPath = path.join(pcapDir, name);
           if (!fs.statSync(fullPath).isFile()) continue;
-          if (matchName(name, "capture.*") || matchName(name, "capture*")) {
+          if (name.startsWith("capture")) {
             files.push(path.join("pcaps", name));
           }
         }

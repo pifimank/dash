@@ -1182,7 +1182,7 @@ export default function App() {
                   <span className="block font-bold">{displaySettings?.buttons?.download_logs?.label || "Скачать логи"}</span>
                   <span className="text-[11px] text-slate-400 font-normal mt-0.5 block">
                     {!logsExist
-                      ? "Нет файлов: /tmp ip2loc_report.*, dns_report.* или /mnt/pcaps/capture.*"
+                      ? "Нет файлов: /tmp ip2loc_report.*, dns_report.* или /mnt/pcaps/capture*"
                       : `Скачать ${downloadFileCount} файл(ов) в ZIP`}
                   </span>
                 </div>

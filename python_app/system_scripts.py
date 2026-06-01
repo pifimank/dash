@@ -161,7 +161,50 @@ def is_clean_running():
         return _clean_running
 
 LOG_REPORT_PATTERNS = ["ip2loc_report.*", "dns_report.*"]
-PCAP_PATTERNS = ["capture.*", "capture*"]
+
+def _read_paths():
+    """Reload paths.json so pcap_dir changes apply without process restart."""
+    try:
+        with open(PATHS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return PATHS
+
+def _is_pcap_download_file(name):
+    """Match capture-20260601-131232.pcap00, capture.pcap, capture.* etc."""
+    return bool(name) and not name.startswith(".") and name.startswith("capture")
+
+
+def _list_pcap_files():
+    paths = _read_paths()
+    pcap_dirs = []
+    for directory in (paths.get("pcap_dir"), "/mnt/pcaps"):
+        if directory and directory not in pcap_dirs:
+            pcap_dirs.append(directory)
+
+    matched = []
+    seen_names = set()
+    for pcap_dir in pcap_dirs:
+        if not os.path.isdir(pcap_dir):
+            continue
+        try:
+            for name in os.listdir(pcap_dir):
+                if not _is_pcap_download_file(name):
+                    continue
+                full_path = os.path.join(pcap_dir, name)
+                if not os.path.isfile(full_path) and not (
+                    os.path.islink(full_path) and os.path.isfile(full_path)
+                ):
+                    continue
+                if not os.access(full_path, os.R_OK):
+                    continue
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                matched.append(full_path)
+        except OSError:
+            continue
+    return sorted(matched)
 
 def _list_files_matching(directory, patterns):
     """List regular files in directory whose basename matches any fnmatch pattern."""
@@ -181,10 +224,12 @@ def _list_files_matching(directory, patterns):
 
 def _collect_download_archive_entries():
     """Collect ip2loc_report.* / dns_report.* from /tmp and capture* from /mnt/pcaps."""
+    paths = _read_paths()
+    tmp_dir = paths.get("tmp_dir", "/tmp")
     entries = []
     seen = set()
 
-    for file_path in _list_files_matching(PATHS["tmp_dir"], LOG_REPORT_PATTERNS):
+    for file_path in _list_files_matching(tmp_dir, LOG_REPORT_PATTERNS):
         arcname = os.path.basename(file_path)
         key = ("report", arcname)
         if key in seen:
@@ -192,8 +237,7 @@ def _collect_download_archive_entries():
         seen.add(key)
         entries.append((file_path, arcname))
 
-    pcap_dir = PATHS.get("pcap_dir", "/mnt/pcaps")
-    for file_path in _list_files_matching(pcap_dir, PCAP_PATTERNS):
+    for file_path in _list_pcap_files():
         arcname = os.path.join("pcaps", os.path.basename(file_path))
         key = ("pcap", arcname)
         if key in seen:
