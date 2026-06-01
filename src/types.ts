@@ -66,6 +66,7 @@ export interface SystemMetricsResponse {
   dns_report_exists: boolean;
   log_files_available: string[];
   download_available?: boolean;
+  capture_files_exist?: boolean;
   running_actions?: Record<string, boolean>;
   settings?: SystemSettings;
   paths?: Record<string, string>;

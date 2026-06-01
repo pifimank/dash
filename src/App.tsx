@@ -291,6 +291,8 @@ export default function App() {
     !(isPanelLocked && !isCaptureServiceActive);
   const isAnyActionRunning = isPanelLocked;
 
+  const pcapFilesExist = metrics?.capture_files_exist === true;
+
   const formatUptime = (raw: string | undefined): string => {
     if (!raw) return "Опрос...";
     const cleaned = raw.trim();
@@ -381,6 +383,9 @@ export default function App() {
       return;
     }
     if (actionKey === "clean" && (isAnyMainServiceActionRunning || isCaptureServiceActive || isActionRunning("clean"))) {
+      return;
+    }
+    if ((actionKey === "packet_analysis" || actionKey === "dns_analysis") && !pcapFilesExist) {
       return;
     }
     if (runningActions[actionKey]) return;
@@ -544,8 +549,12 @@ export default function App() {
 
   // Download available: independent of analysis/capture tasks — only file presence matters
   const downloadFileCount = metrics?.log_files_available?.length ?? 0;
-  const logsExist = Boolean(metrics?.download_available) || downloadFileCount > 0;
+  const logsExist = metrics?.download_available === true || downloadFileCount > 0;
   const downloadEnabled = logsExist && displaySettings?.buttons?.download_logs?.enabled !== false;
+  const analysisEnabled = (key: "packet_analysis" | "dns_analysis") =>
+    pcapFilesExist &&
+    displaySettings?.buttons?.[key]?.enabled !== false &&
+    !isPanelLocked;
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-805 pb-20 font-sans relative antialiased leading-relaxed select-text">
@@ -1025,13 +1034,13 @@ export default function App() {
             {/* --- 2.3 PACKET ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.packet_analysis?.visible !== false && (
               <button
-                disabled={isPanelLocked || displaySettings?.buttons?.packet_analysis?.enabled === false}
+                disabled={!analysisEnabled("packet_analysis") && !isActionRunning("packet_analysis")}
                 onClick={handlePacketAnalysis}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("packet_analysis")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
-                      : isPanelLocked || displaySettings?.buttons?.packet_analysis?.enabled === false
+                      : !analysisEnabled("packet_analysis")
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-800 hover:border-blue-405 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
@@ -1039,7 +1048,7 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <FileText className={`w-4 h-4 ${isActionRunning("packet_analysis") ? "text-white" : "text-purple-500"}`} />
+                    <FileText className={`w-4 h-4 ${isActionRunning("packet_analysis") ? "text-white" : pcapFilesExist ? "text-purple-500" : "text-slate-400"}`} />
                   </span>
                   {isActionRunning("packet_analysis") && (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
@@ -1048,7 +1057,7 @@ export default function App() {
                 <div>
                   <span className="block font-bold text-slate-800">{displaySettings?.buttons?.packet_analysis?.label || "Анализ пакетов"}</span>
                   <span className="text-[11px] text-slate-405 font-normal mt-0.5 block font-sans">
-                    Скрипт as_report.sh
+                    {pcapFilesExist ? "Скрипт as_report.sh" : "Нет pcap в /mnt/pcaps (capture*)"}
                   </span>
                 </div>
               </button>
@@ -1057,13 +1066,13 @@ export default function App() {
             {/* --- 2.4 DNS ANALYSIS BUTTON --- */}
             {displaySettings?.buttons?.dns_analysis?.visible !== false && (
               <button
-                disabled={isPanelLocked || displaySettings?.buttons?.dns_analysis?.enabled === false}
+                disabled={!analysisEnabled("dns_analysis") && !isActionRunning("dns_analysis")}
                 onClick={handleDnsAnalysis}
                 className={`flex flex-col justify-between items-start text-left p-4 h-32 rounded-xl border text-sm font-semibold transition-all group relative
                   ${
                     isActionRunning("dns_analysis")
                       ? "bg-blue-600 border-blue-500 text-white shadow-lg cursor-wait"
-                      : isPanelLocked || displaySettings?.buttons?.dns_analysis?.enabled === false
+                      : !analysisEnabled("dns_analysis")
                       ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed opacity-50"
                       : "bg-sky-50/60 hover:bg-sky-100 border-sky-200 text-slate-808 hover:border-[#10b981]/40 hover:translate-y-[-2px] shadow-sm cursor-pointer"
                   }
@@ -1071,7 +1080,7 @@ export default function App() {
               >
                 <div className="flex justify-between w-full">
                   <span className="p-2 rounded-lg bg-white border border-sky-200">
-                    <Activity className={`w-4 h-4 ${isActionRunning("dns_analysis") ? "text-white" : "text-teal-500"}`} />
+                    <Activity className={`w-4 h-4 ${isActionRunning("dns_analysis") ? "text-white" : pcapFilesExist ? "text-teal-500" : "text-slate-400"}`} />
                   </span>
                   {isActionRunning("dns_analysis") && (
                     <RefreshCw className="w-4 h-4 animate-spin text-white mt-1" />
@@ -1080,7 +1089,7 @@ export default function App() {
                 <div>
                   <span className="block font-bold text-slate-800">{displaySettings?.buttons?.dns_analysis?.label || "Анализ ДНС"}</span>
                   <span className="text-[11px] text-slate-405 font-normal mt-0.5 block font-sans">
-                    Скрипт getdns.sh
+                    {pcapFilesExist ? "Скрипт getdns.sh" : "Нет pcap в /mnt/pcaps (capture*)"}
                   </span>
                 </div>
               </button>

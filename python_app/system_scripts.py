@@ -16,6 +16,9 @@ PATHS_FILE = os.path.join(os.path.dirname(__file__), 'paths.json')
 with open(PATHS_FILE, 'r') as f:
     PATHS = json.load(f)
 
+# Bump when deploying — visible in /api/metrics to confirm live code version
+DASHBOARD_BUILD_ID = "20260601-pcap-download-v3"
+
 _SETTINGS_FILE = os.path.join(os.path.dirname(__file__), 'settings.json')
 _PATHS_FILE = PATHS_FILE
 
@@ -250,6 +253,10 @@ def _collect_download_archive_entries():
 def list_download_files():
     """Return archive entry names available for download."""
     return [arcname for _, arcname in _collect_download_archive_entries()]
+
+def has_pcap_files():
+    """True if /mnt/pcaps contains capture* pcap files."""
+    return len(_list_pcap_files()) > 0
 
 def has_download_files():
     """True if any ip2loc_report.*, dns_report.* or /mnt/pcaps/capture.* files exist."""
@@ -569,6 +576,7 @@ def _build_dashboard_snapshot():
     download_files = list_download_files()
     metrics["log_files_available"] = download_files
     metrics["download_available"] = len(download_files) > 0
+    metrics["capture_files_exist"] = has_pcap_files()
 
     try:
         with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -612,10 +620,34 @@ def get_dashboard_metrics():
     with _metrics_cache_lock:
         metrics = dict(_metrics_cache) if _metrics_cache else _build_dashboard_snapshot()
 
-    download_files = list_download_files()
+    try:
+        download_files = list_download_files()
+    except Exception:
+        download_files = []
+
     metrics["log_files_available"] = download_files
     metrics["download_available"] = len(download_files) > 0
+    metrics["dashboard_build"] = DASHBOARD_BUILD_ID
+    try:
+        metrics["capture_files_exist"] = has_pcap_files()
+    except Exception:
+        metrics["capture_files_exist"] = False
     return metrics
+
+def get_download_status():
+    """Diagnostic snapshot for download button / zip building."""
+    paths = _read_paths()
+    pcap_dir = paths.get("pcap_dir", "/mnt/pcaps")
+    pcap_files = _list_pcap_files()
+    download_files = list_download_files()
+    return {
+        "tmp_dir": paths.get("tmp_dir", "/tmp"),
+        "pcap_dir": pcap_dir,
+        "pcap_dir_exists": os.path.isdir(pcap_dir),
+        "pcap_files_on_disk": [os.path.basename(p) for p in pcap_files],
+        "log_files_available": download_files,
+        "download_available": len(download_files) > 0,
+    }
 
 _action_queue = []
 _action_queue_lock = threading.Lock()

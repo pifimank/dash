@@ -118,6 +118,19 @@ async function startServer() {
     return files;
   };
 
+  const hasPcapFiles = (): boolean => {
+    try {
+      const pcapDir = "/mnt/pcaps";
+      if (!fs.existsSync(pcapDir)) return false;
+      return fs.readdirSync(pcapDir).some((name) => {
+        if (!name.startsWith("capture")) return false;
+        return fs.statSync(path.join(pcapDir, name)).isFile();
+      });
+    } catch (e) {
+      return false;
+    }
+  };
+
   // Serve API routes first
   app.get("/api/metrics", (req, res) => {
     // Generate realistic simulated statistics for the AI Studio live preview
@@ -127,17 +140,8 @@ async function startServer() {
     const ipReportExists = fs.existsSync(mockIpCsvPath);
     const dnsReportExists = fs.existsSync(mockDnsCsvPath);
     
-    // Check if files starting with "capture" exist in /mnt/pcaps
-    let captureFilesExist = false;
-    try {
-      const pcapDir = "/mnt/pcaps";
-      if (fs.existsSync(pcapDir)) {
-        const files = fs.readdirSync(pcapDir);
-        captureFilesExist = files.some(file => file.startsWith("capture"));
-      }
-    } catch (e: any) {
-      console.error("Error reading /mnt/pcaps folder:", e.message);
-    }
+    // Check if capture* pcap files exist in /mnt/pcaps
+    const captureFilesExist = hasPcapFiles();
 
     const mockMetrics = {
       cores: [
@@ -268,6 +272,9 @@ async function startServer() {
   };
 
   app.post("/api/actions/packet-analysis", async (req, res) => {
+    if (!hasPcapFiles()) {
+      return res.status(400).json({ success: false, error: "Нет pcap-файлов в /mnt/pcaps (capture*)" });
+    }
     if (fs.existsSync("/usr/local/bin/as_report.sh")) {
       packetAnalysisActive = true;
       res.json({ success: true, message: "Анализ пакетов запущен в фоновом режиме." });
@@ -284,6 +291,9 @@ async function startServer() {
   });
 
   app.post("/api/actions/dns-analysis", async (req, res) => {
+    if (!hasPcapFiles()) {
+      return res.status(400).json({ success: false, error: "Нет pcap-файлов в /mnt/pcaps (capture*)" });
+    }
     if (fs.existsSync("/usr/local/bin/getdns.sh")) {
       dnsAnalysisActive = true;
       res.json({ success: true, message: "Анализ ДНС запущен в фоновом режиме." });

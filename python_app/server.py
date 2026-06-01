@@ -85,6 +85,12 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json_response(500, {"error": str(e)})
 
+        elif self.path == '/api/download/status':
+            try:
+                self.send_json_response(200, system_scripts.get_download_status())
+            except Exception as e:
+                self.send_json_response(500, {"error": str(e)})
+
         elif self.path == '/api/report/ip':
             csv_path = system_scripts.PATHS["ip2loc_report_csv"]
             if not os.path.exists(csv_path):
@@ -173,10 +179,16 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_json_response(500, {"success": False, "error": err})
 
         elif self.path == '/api/actions/packet-analysis':
+            if not system_scripts.has_pcap_files():
+                self.send_json_response(400, {"success": False, "error": "Нет pcap-файлов в /mnt/pcaps (capture*)"})
+                return
             system_scripts.schedule_as_report()
             self.send_json_response(200, {"success": True, "message": "Анализ пакетов запущен в фоновом режиме."})
 
         elif self.path == '/api/actions/dns-analysis':
+            if not system_scripts.has_pcap_files():
+                self.send_json_response(400, {"success": False, "error": "Нет pcap-файлов в /mnt/pcaps (capture*)"})
+                return
             system_scripts.schedule_dns_report()
             self.send_json_response(200, {"success": True, "message": "Анализ ДНС запущен в фоновом режиме."})
 
@@ -222,6 +234,10 @@ class ThreadingDualStackHTTPServer(ThreadingMixIn, DualStackHTTPServer):
 
 def run():
     system_scripts.ensure_metrics_collector()
+    status = system_scripts.get_download_status()
+    print(f"Dashboard code: {os.path.dirname(__file__)}")
+    print(f"Pcap dir: {status['pcap_dir']} (exists={status['pcap_dir_exists']})")
+    print(f"Download available: {status['download_available']} files={status['log_files_available']}")
     server_address = ('', PORT)
     # Use IPv6 socket to bind both IPv4 and IPv6 interfaces
     ThreadingDualStackHTTPServer.address_family = socket.AF_INET6
