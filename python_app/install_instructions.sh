@@ -10,7 +10,7 @@ pip3 install requests
 # sudo cp -r . /home/rpaltaev/dashboard
 
 # Copy and enable systemd service
-# sudo cp getipdns.sh /usr/local/bin/getipdns.sh && sudo chmod +x /usr/local/bin/getipdns.sh
+# sudo cp getipdns.sh getipdns_parse.py /usr/local/bin/ && sudo chmod +x /usr/local/bin/getipdns.sh /usr/local/bin/getipdns_parse.py
 # sudo cp python_app/systemd_dashboard.service /etc/systemd/system/dashboard.service
 # sudo systemctl daemon-reload
 # sudo systemctl enable dashboard.service

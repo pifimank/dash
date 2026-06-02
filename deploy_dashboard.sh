@@ -11,7 +11,8 @@ python3 python_app/verify_download.py
 echo ""
 echo "=== 2. Install getipdns.sh ==="
 sudo cp getipdns.sh /usr/local/bin/getipdns.sh
-sudo chmod +x /usr/local/bin/getipdns.sh
+sudo cp getipdns_parse.py /usr/local/bin/getipdns_parse.py
+sudo chmod +x /usr/local/bin/getipdns.sh /usr/local/bin/getipdns_parse.py
 
 echo ""
 echo "=== 3. Install systemd unit ==="

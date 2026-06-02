@@ -40,6 +40,17 @@ if ! command -v tshark &>/dev/null; then
     echo "ОШИБКА: tshark не установлен" >&2
     exit 1
 fi
+if ! command -v python3 &>/dev/null; then
+    echo "ОШИБКА: python3 не установлен (нужен для разбора DNS)" >&2
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARSE_PY="${GETIPDNS_PARSE_PY:-$SCRIPT_DIR/getipdns_parse.py}"
+if [ ! -f "$PARSE_PY" ]; then
+    echo "ОШИБКА: не найден парсер DNS: $PARSE_PY" >&2
+    exit 1
+fi
 
 sleep 2
 if pgrep -x tcpdump &>/dev/null; then
@@ -73,154 +84,19 @@ fi
 TMP_DIR=$(mktemp -d /tmp/getipdns_XXXXXX)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-PARSE_AWK="$TMP_DIR/parse.awk"
-cat > "$PARSE_AWK" << 'AWK_SCRIPT'
-function type_str(t) {
-    if (t == 1)  return "A"
-    if (t == 2)  return "NS"
-    if (t == 5)  return "CNAME"
-    if (t == 6)  return "SOA"
-    if (t == 12) return "PTR"
-    if (t == 15) return "MX"
-    if (t == 16) return "TXT"
-    if (t == 28) return "AAAA"
-    if (t == 33) return "SRV"
-    if (t == 41) return "OPT"
-    if (t == 255) return "ANY"
-    return "TYPE" t
-}
-function is_mdns_port(p) {
-    return p == 5353
-}
-function is_mdns_addr(v4, v6) {
-    return v4 == "224.0.0.251" || v6 == "ff02::fb"
-}
-function emit_ips(field, ips_out) {
-    if (field == "") return
-    n = split(field, parts, ",")
-    for (i = 1; i <= n; i++) {
-        if (parts[i] != "") print parts[i] >> ips_out
-    }
-}
-function dns_proto(ip4, ip6, dport, sport) {
-    if (is_mdns_port(dport) || is_mdns_port(sport) || is_mdns_addr(ip4, ip6)) return "mdns"
-    return "unicast"
-}
-BEGIN {
-    if (ips_out == "" || dns_out == "") {
-        print "parse.awk: ips_out and dns_out required" >> "/dev/stderr"
-        exit 1
-    }
-}
-{
-    # Fields: ip.dst ipv6.dst dns.qry.name dns.qry.type dns.resp.name dns.resp.type
-    #         dns.a dns.aaaa dns.cname dns.ptr dns.mx dns.srv dns.txt dns.soa dns.ns
-    #         udp.dstport udp.srcport
-    emit_ips($1, ips_out)
-    emit_ips($2, ips_out)
-
-    ip4 = $1
-    ip6 = $2
-    dport = $16 + 0
-    sport = $17 + 0
-    proto = dns_proto(ip4, ip6, dport, sport)
-
-    if ($3 != "") {
-        split($3, names, ",")
-        split($4, types, ",")
-        for (j = 1; j <= length(names); j++) {
-            name = names[j]
-            t = types[j] + 0
-            if (name == "") continue
-            if (skip_mdns == 1 && (proto == "mdns" || name ~ /\.local$/)) continue
-            print "Query," type_str(t) "," name "," proto >> dns_out
-        }
-    }
-
-    fqdn = ""
-    if ($3 != "") { split($3, qnames, ","); fqdn = qnames[1] }
-    if (fqdn == "" && $5 != "") { split($5, rnames, ","); fqdn = rnames[1] }
-    restype = $6 + 0
-    if (restype == 0) next
-
-    typestr = type_str(restype)
-    if (skip_mdns == 1 && (proto == "mdns" || fqdn ~ /\.local$/)) next
-
-    if (restype == 1 && $7 != "") {
-        split($7, ips, ",")
-        for (i = 1; i <= length(ips); i++) if (ips[i] != "") print "Response," typestr "," ips[i] "," fqdn "," proto >> dns_out
-    }
-    if (restype == 28 && $8 != "") {
-        split($8, ips, ",")
-        for (i = 1; i <= length(ips); i++) if (ips[i] != "") print "Response," typestr "," ips[i] "," fqdn "," proto >> dns_out
-    }
-    if (restype == 5 && $9 != "") {
-        split($9, cnames, ",")
-        for (i = 1; i <= length(cnames); i++) if (cnames[i] != "") print "Response," typestr "," cnames[i] "," fqdn "," proto >> dns_out
-    }
-    if (restype == 12 && $10 != "") {
-        split($10, ptrs, ",")
-        for (i = 1; i <= length(ptrs); i++) if (ptrs[i] != "") print "Response," typestr "," ptrs[i] "," fqdn "," proto >> dns_out
-    }
-    if (restype == 15 && $11 != "") {
-        split($11, mxs, ",")
-        for (i = 1; i <= length(mxs); i++) if (mxs[i] != "") print "Response," typestr "," mxs[i] "," fqdn "," proto >> dns_out
-    }
-    if (restype == 33 && $12 != "") {
-        split($12, srvs, ",")
-        for (i = 1; i <= length(srvs); i++) if (srvs[i] != "") print "Response," typestr "," srvs[i] "," fqdn "," proto >> dns_out
-    }
-    if (restype == 16 && $13 != "") {
-        txt = $13
-        gsub(/^"/, "", txt); gsub(/"$/, "", txt)
-        print "Response," typestr "," txt "," fqdn "," proto >> dns_out
-    }
-    if (restype == 6 && $14 != "") {
-        print "Response," typestr "," $14 "," fqdn "," proto >> dns_out
-    }
-    if (restype == 2 && $15 != "") {
-        split($15, nss, ",")
-        for (i = 1; i <= length(nss); i++) if (nss[i] != "") print "Response," typestr "," nss[i] "," fqdn "," proto >> dns_out
-    }
-}
-END {
-    close(ips_out)
-    close(dns_out)
-}
-AWK_SCRIPT
-
 process_pcap_file() {
     local pcap="$1"
     local ips_out="$2"
     local dns_out="$3"
-    tshark -r "$pcap" -Y "ip or ipv6" -T fields \
-        -E header=n -E separator=$'\t' -n -q 2>/dev/null \
-        -e ip.dst \
-        -e ipv6.dst \
-        -e dns.qry.name \
-        -e dns.qry.type \
-        -e dns.resp.name \
-        -e dns.resp.type \
-        -e dns.a \
-        -e dns.aaaa \
-        -e dns.cname \
-        -e dns.ptr.domain_name \
-        -e dns.mx.mail_exchange \
-        -e dns.srv.name \
-        -e dns.txt \
-        -e dns.soa.mname \
-        -e dns.ns \
-        -e udp.dstport \
-        -e udp.srcport \
-        | awk -v skip_mdns="$SKIP_MDNS" -v ips_out="$ips_out" -v dns_out="$dns_out" -F'\t' -f "$PARSE_AWK"
+    python3 "$PARSE_PY" "$pcap" "$ips_out" "$dns_out" "$SKIP_MDNS"
 }
 export -f process_pcap_file
-export PARSE_AWK SKIP_MDNS
+export PARSE_PY SKIP_MDNS
 
 total_files=${#valid_files[@]}
 files_per_core=$(( (total_files + CORES - 1) / CORES ))
 
-echo "Извлекаем IP и DNS: один проход tshark на файл ($CORES потоков)..."
+echo "Извлекаем IP и DNS: tshark JSON, все RR в ответах ($CORES потоков)..."
 
 pids=()
 for i in $(seq 0 $((CORES - 1))); do
