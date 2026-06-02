@@ -46,7 +46,15 @@ if ! command -v python3 &>/dev/null; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PARSE_PY="${GETIPDNS_PARSE_PY:-$SCRIPT_DIR/getipdns_parse.py}"
+if [ -n "${GETIPDNS_PARSE_PY:-}" ]; then
+    PARSE_PY="$GETIPDNS_PARSE_PY"
+elif [ -f "$SCRIPT_DIR/getipdns_parse.py" ]; then
+    PARSE_PY="$SCRIPT_DIR/getipdns_parse.py"
+elif [ -f "/usr/local/bin/getipdns_parse.py" ]; then
+    PARSE_PY="/usr/local/bin/getipdns_parse.py"
+else
+    PARSE_PY="$SCRIPT_DIR/getipdns_parse.py"
+fi
 if [ ! -f "$PARSE_PY" ]; then
     echo "ОШИБКА: не найден парсер DNS: $PARSE_PY" >&2
     exit 1
@@ -96,7 +104,8 @@ export PARSE_PY SKIP_MDNS
 total_files=${#valid_files[@]}
 files_per_core=$(( (total_files + CORES - 1) / CORES ))
 
-echo "Извлекаем IP и DNS: tshark JSON, все RR в ответах ($CORES потоков)..."
+echo "Извлекаем IP и DNS: tshark fields + python ($CORES потоков)..."
+echo "Парсер: $PARSE_PY"
 
 pids=()
 for i in $(seq 0 $((CORES - 1))); do
@@ -105,6 +114,7 @@ for i in $(seq 0 $((CORES - 1))); do
     part_files=("${valid_files[@]:start:files_per_core}")
 
     (
+        export PARSE_PY SKIP_MDNS
         ips_file="$TMP_DIR/ips_$i.txt"
         dns_file="$TMP_DIR/dns_$i.tmp"
         : > "$ips_file"
@@ -120,6 +130,13 @@ echo "Ожидаем завершения потоков tshark..."
 for pid in "${pids[@]}"; do
     wait "$pid"
 done
+
+raw_ips=$(cat "$TMP_DIR"/ips_*.txt 2>/dev/null | wc -l | tr -d ' ')
+raw_dns=$(cat "$TMP_DIR"/dns_*.tmp 2>/dev/null | wc -l | tr -d ' ')
+echo "После извлечения: IP строк=$raw_ips, DNS строк=$raw_dns"
+if [ "${raw_ips:-0}" -eq 0 ] && [ "${raw_dns:-0}" -eq 0 ]; then
+    echo "ПРЕДУПРЕЖДЕНИЕ: tshark не вернул данных. Проверка: GETIPDNS_DEBUG=1 /usr/local/bin/getipdns.sh" >&2
+fi
 
 # =============================================================================
 # Build reports in parallel (IP lookup + DNS formatting)

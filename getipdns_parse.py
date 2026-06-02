@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """
-Parse a pcap with tshark JSON: extract destination IPs and all DNS queries/responses.
-Output format (append to files):
-  IPs: one address per line in ips_out
-  DNS: Query,<type>,<name>,<proto>  or  Response,<type>,<value>,<fqdn>,<proto>
+Parse pcap via tshark -T fields (legacy-compatible, works on all tshark versions).
+Extracts destination IPs and all DNS queries/responses, including multiple RRs per packet.
 """
 from __future__ import annotations
 
-import json
+import os
 import subprocess
 import sys
 from collections import defaultdict, deque
-from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Deque, Dict, List, Set, Tuple
 
 TYPE_NAMES: Dict[int, str] = {
     1: "A",
@@ -29,295 +27,144 @@ TYPE_NAMES: Dict[int, str] = {
     47: "NSEC",
     48: "DNSKEY",
     65: "HTTPS",
-    99: "SPF",
     255: "ANY",
 }
 
-# tshark field -> RR type (for queue / fallback extraction)
-FIELD_TO_TYPE: Dict[str, int] = {
-    "dns.a": 1,
-    "dns.aaaa": 28,
-    "dns.cname": 5,
-    "dns.ptr.domain_name": 12,
-    "dns.mx.mail_exchange": 15,
-    "dns.txt": 16,
-    "dns.srv.name": 33,
-    "dns.srv.target": 33,
-    "dns.soa.mname": 6,
-    "dns.ns": 2,
-    "dns.resp.data": 0,
-}
+IDX_IP_DST = 0
+IDX_IPV6_DST = 1
+IDX_QRY_NAME = 2
+IDX_QRY_TYPE = 3
+IDX_RESP_NAME = 4
+IDX_RESP_TYPE = 5
+IDX_A = 6
+IDX_AAAA = 7
+IDX_CNAME = 8
+IDX_PTR = 9
+IDX_MX = 10
+IDX_SRV = 11
+IDX_TXT = 12
+IDX_SOA = 13
+IDX_NS = 14
+IDX_UDP_PORT = 15
+FIELD_COUNT = 16
 
-RDATA_FIELDS_BY_TYPE: Dict[int, List[str]] = {
-    1: ["dns.a"],
-    28: ["dns.aaaa"],
-    5: ["dns.cname"],
-    12: ["dns.ptr.domain_name"],
-    15: ["dns.mx.mail_exchange"],
-    16: ["dns.txt"],
-    33: ["dns.srv.name", "dns.srv.target"],
-    6: ["dns.soa.mname"],
-    2: ["dns.ns"],
-}
+# Same core fields as legacy as_report.sh / getdns.sh (widely supported by tshark)
+TSHARK_FIELDS = [
+    "ip.dst",
+    "ipv6.dst",
+    "dns.qry.name",
+    "dns.qry.type",
+    "dns.resp.name",
+    "dns.resp.type",
+    "dns.a",
+    "dns.aaaa",
+    "dns.cname",
+    "dns.ptr.domain_name",
+    "dns.mx.mail_exchange",
+    "dns.srv.name",
+    "dns.txt",
+    "dns.soa.mname",
+    "dns.ns",
+    "udp.port",
+]
 
 
 def type_name(t: int) -> str:
     return TYPE_NAMES.get(t, f"TYPE{t}")
 
 
-def explode_values(value: Any) -> List[str]:
-    """Turn tshark JSON field values into a flat list of strings."""
-    if value is None:
+def split_field(value: str) -> List[str]:
+    if not value:
         return []
-    if isinstance(value, list):
-        out: List[str] = []
-        for item in value:
-            out.extend(explode_values(item))
-        return out
-    if isinstance(value, dict):
-        out = []
-        for item in value.values():
-            out.extend(explode_values(item))
-        return out
-
-    text = str(value).strip()
-    if not text:
-        return []
-
-    # Quoted TXT blobs may contain commas
-    if text.startswith('"') and text.endswith('"'):
-        return [text[1:-1]]
-
-    parts = [p.strip() for p in text.split(",")]
-    return [p for p in parts if p]
+    parts: List[str] = []
+    for part in value.split(","):
+        part = part.strip().strip('"')
+        if part:
+            parts.append(part)
+    return parts
 
 
-def normalize_dns_key(key: str) -> str:
-    key = key.replace("dns.dns.", "dns.")
-    if key.startswith("dns."):
-        return key
-    idx = key.find(".dns.")
-    if idx >= 0:
-        return "dns." + key[idx + 5 :]
-    if key.startswith("dns"):
-        return "dns." + key[3:].lstrip(".")
-    return key
-
-
-def collect_dns_fields(layers: Any) -> Dict[str, List[str]]:
-    """Collect all dns.* fields from tshark JSON layers (nested or flat)."""
-    collected: Dict[str, List[str]] = defaultdict(list)
-
-    def add_field(raw_key: str, value: Any) -> None:
-        key = normalize_dns_key(raw_key)
-        if not key.startswith("dns."):
-            return
-        for part in explode_values(value):
-            if part:
-                collected[key].append(part)
-
-    def walk(node: Any) -> None:
-        if not isinstance(node, dict):
-            return
-        for k, v in node.items():
-            if not isinstance(k, str):
-                continue
-            if "dns" in k.lower():
-                if isinstance(v, dict):
-                    for k2, v2 in v.items():
-                        add_field(k2, v2)
-                else:
-                    add_field(k, v)
-            elif isinstance(v, dict):
-                walk(v)
-
-    walk(layers)
-    return collected
-
-
-def first_val(fields: Dict[str, List[str]], *keys: str) -> str:
-    for key in keys:
-        vals = fields.get(key, [])
-        if vals:
-            return vals[0]
+def field_at(parts: List[str], idx: int) -> str:
+    if idx < len(parts):
+        return parts[idx] or ""
     return ""
 
 
-def field_vals(fields: Dict[str, List[str]], key: str) -> List[str]:
-    return list(fields.get(key, []))
-
-
-def is_mdns(fields: Dict[str, List[str]], ip4: str, ip6: str) -> bool:
-    for port_key in ("dns.udp.dstport", "dns.udp.srcport", "udp.dstport", "udp.srcport"):
-        for p in field_vals(fields, port_key):
-            try:
-                if int(p) == 5353:
-                    return True
-            except ValueError:
-                pass
+def is_mdns_packet(parts: List[str]) -> bool:
+    ip4 = field_at(parts, IDX_IP_DST)
+    ip6 = field_at(parts, IDX_IPV6_DST)
+    for port in split_field(field_at(parts, IDX_UDP_PORT)):
+        try:
+            if int(port) == 5353:
+                return True
+        except ValueError:
+            pass
     if ip4 == "224.0.0.251" or ip6 == "ff02::fb":
         return True
     return False
 
 
-def is_dns_response(fields: Dict[str, List[str]]) -> bool:
-    resp = first_val(fields, "dns.flags.response")
-    if resp in ("1", "True", "true"):
+def is_response_packet(parts: List[str]) -> bool:
+    if split_field(field_at(parts, IDX_RESP_TYPE)):
         return True
-    flags = first_val(fields, "dns.flags")
-    if flags:
-        try:
-            value = int(str(flags), 0)
-            return bool(value & 0x8000)
-        except ValueError:
-            pass
-    counts = field_vals(fields, "dns.count.answers")
-    if counts:
-        try:
-            if int(counts[0]) > 0:
-                return True
-        except ValueError:
-            pass
-    if field_vals(fields, "dns.resp.type"):
-        return True
-    for field in FIELD_TO_TYPE:
-        if field not in ("dns.resp.data",) and field_vals(fields, field):
+    for idx in (IDX_A, IDX_AAAA, IDX_CNAME, IDX_PTR, IDX_MX, IDX_SRV, IDX_TXT, IDX_NS):
+        if field_at(parts, idx):
             return True
     return False
 
 
-def build_type_queues(fields: Dict[str, List[str]]) -> Dict[int, Deque[str]]:
+def field_list(parts: List[str], idx: int) -> List[str]:
+    return split_field(field_at(parts, idx))
+
+
+def build_rdata_queues(parts: List[str]) -> Dict[int, Deque[str]]:
     queues: Dict[int, Deque[str]] = defaultdict(deque)
-    for field, tnum in FIELD_TO_TYPE.items():
-        if tnum <= 0:
-            continue
-        for val in field_vals(fields, field):
+    mapping = {
+        1: field_list(parts, IDX_A),
+        28: field_list(parts, IDX_AAAA),
+        5: field_list(parts, IDX_CNAME),
+        12: field_list(parts, IDX_PTR),
+        16: field_list(parts, IDX_TXT),
+        2: field_list(parts, IDX_NS),
+        15: field_list(parts, IDX_MX),
+        33: field_list(parts, IDX_SRV),
+        6: field_list(parts, IDX_SOA),
+    }
+    for tnum, vals in mapping.items():
+        for val in vals:
             queues[tnum].append(val)
     return queues
 
 
-def format_mx(fields: Dict[str, List[str]], idx: int) -> str:
-    prefs = field_vals(fields, "dns.mx.preference")
-    hosts = field_vals(fields, "dns.mx.mail_exchange")
-    if idx < len(hosts):
-        host = hosts[idx]
-        if idx < len(prefs) and prefs[idx]:
-            return f"{prefs[idx]} {host}"
-        return host
-    return ""
-
-
-def format_srv(fields: Dict[str, List[str]], idx: int) -> str:
-    names = field_vals(fields, "dns.srv.name") or field_vals(fields, "dns.srv.target")
-    pri = field_vals(fields, "dns.srv.priority")
-    weight = field_vals(fields, "dns.srv.weight")
-    port = field_vals(fields, "dns.srv.port")
-    if idx < len(names):
-        parts = []
-        if idx < len(pri) and pri[idx]:
-            parts.append(pri[idx])
-        if idx < len(weight) and weight[idx]:
-            parts.append(weight[idx])
-        if idx < len(port) and port[idx]:
-            parts.append(port[idx])
-        parts.append(names[idx])
-        return " ".join(parts)
-    return ""
-
-
-def format_soa(fields: Dict[str, List[str]], idx: int) -> str:
-    parts_keys = [
-        "dns.soa.mname",
-        "dns.soa.rname",
-        "dns.soa.serial_number",
-        "dns.soa.refresh_interval",
-        "dns.soa.retry_interval",
-        "dns.soa.expire_limit",
-        "dns.soa.minimum_ttl",
-    ]
-    chunks = []
-    for key in parts_keys:
-        vals = field_vals(fields, key)
-        if idx < len(vals) and vals[idx]:
-            chunks.append(vals[idx])
-    return " ".join(chunks)
-
-
-def pop_rdata_for_type(
-    tnum: int,
-    idx: int,
-    fields: Dict[str, List[str]],
-    queues: Dict[int, Deque[str]],
-) -> str:
-    if tnum == 15:
-        mx = format_mx(fields, idx)
-        if mx:
-            return mx
-    if tnum == 33:
-        srv = format_srv(fields, idx)
-        if srv:
-            return srv
-    if tnum == 6:
-        soa = format_soa(fields, idx)
-        if soa:
-            return soa
-
+def pop_rdata(tnum: int, idx: int, parts: List[str], queues: Dict[int, Deque[str]]) -> str:
     q = queues.get(tnum)
     if q:
         return q.popleft()
-
-    for field in RDATA_FIELDS_BY_TYPE.get(tnum, []):
-        vals = field_vals(fields, field)
-        if idx < len(vals):
-            return vals[idx]
+    vals = field_list(parts, {
+        1: IDX_A,
+        28: IDX_AAAA,
+        5: IDX_CNAME,
+        12: IDX_PTR,
+        15: IDX_MX,
+        16: IDX_TXT,
+        33: IDX_SRV,
+        6: IDX_SOA,
+        2: IDX_NS,
+    }.get(tnum, -1))
+    if idx < len(vals):
+        return vals[idx]
     return ""
 
 
-def emit_all_rdata_fields(
-    fields: Dict[str, List[str]],
+def emit_response(
+    out,
+    seen: Set[Tuple[str, str, str, str, str]],
+    tstr: str,
+    val: str,
     fqdn: str,
     proto: str,
     skip_mdns: bool,
-    out,
-    seen: Set[Tuple[str, str, str, str, str]],
 ) -> None:
-    """Fallback: emit every populated rdata field (catches RRs missing from dns.resp.type list)."""
-    if skip_mdns and (proto == "mdns" or (fqdn and fqdn.endswith(".local"))):
-        return
-
-    for field, tnum in FIELD_TO_TYPE.items():
-        if tnum <= 0:
-            continue
-        tstr = type_name(tnum)
-        vals = field_vals(fields, field)
-        if tnum == 15:
-            prefs = field_vals(fields, "dns.mx.preference")
-            for i, host in enumerate(field_vals(fields, "dns.mx.mail_exchange")):
-                pref = prefs[i] if i < len(prefs) else ""
-                val = f"{pref} {host}".strip() if pref else host
-                _emit_response(out, seen, tstr, val, fqdn, proto, skip_mdns)
-            continue
-        if tnum == 33:
-            for i in range(max(len(field_vals(fields, "dns.srv.name")), len(field_vals(fields, "dns.srv.target")))):
-                val = format_srv(fields, i)
-                if val:
-                    _emit_response(out, seen, tstr, val, fqdn, proto, skip_mdns)
-            continue
-        if tnum == 6:
-            for i in range(len(field_vals(fields, "dns.soa.mname"))):
-                val = format_soa(fields, i)
-                if val:
-                    _emit_response(out, seen, tstr, val, fqdn, proto, skip_mdns)
-            continue
-        for val in vals:
-            _emit_response(out, seen, tstr, val, fqdn, proto, skip_mdns)
-
-    # Generic unknown-type rdata
-    for val in field_vals(fields, "dns.resp.data"):
-        _emit_response(out, seen, "DATA", val, fqdn, proto, skip_mdns)
-
-
-def _emit_response(out, seen, tstr: str, val: str, fqdn: str, proto: str, skip_mdns: bool) -> None:
     if not val:
         return
     if skip_mdns and (proto == "mdns" or (fqdn and fqdn.endswith(".local"))):
@@ -329,47 +176,58 @@ def _emit_response(out, seen, tstr: str, val: str, fqdn: str, proto: str, skip_m
     out.write(f"Response,{tstr},{val},{fqdn},{proto}\n")
 
 
-def extract_ips_from_layers(layers: Any) -> Set[str]:
-    ips: Set[str] = set()
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            for k, v in node.items():
-                kn = k.lower()
-                if kn in ("ip.dst", "ip.dst_host") or kn.endswith(".ip.dst"):
-                    ips.update(explode_values(v))
-                elif kn in ("ipv6.dst", "ipv6.dst_host") or kn.endswith(".ipv6.dst"):
-                    ips.update(explode_values(v))
-                elif isinstance(v, dict):
-                    walk(v)
-                elif isinstance(v, list):
-                    for item in v:
-                        walk(item)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(layers)
-    return {ip for ip in ips if ip and ip != "0.0.0.0"}
-
-
-def process_dns_packet(
-    fields: Dict[str, List[str]],
-    skip_mdns: int,
-    dns_out,
+def emit_fallback_responses(
+    parts: List[str],
+    fqdn: str,
+    proto: str,
+    skip_mdns: bool,
+    out,
     seen: Set[Tuple[str, str, str, str, str]],
 ) -> None:
-    ip4 = first_val(fields, "dns.ip.dst", "ip.dst")
-    ip6 = first_val(fields, "ipv6.dst")
-    proto = "mdns" if is_mdns(fields, ip4, ip6) else "unicast"
+    for ip in field_list(parts, IDX_A):
+        emit_response(out, seen, "A", ip, fqdn, proto, skip_mdns)
+    for ip in field_list(parts, IDX_AAAA):
+        emit_response(out, seen, "AAAA", ip, fqdn, proto, skip_mdns)
+    for val in field_list(parts, IDX_CNAME):
+        emit_response(out, seen, "CNAME", val, fqdn, proto, skip_mdns)
+    for val in field_list(parts, IDX_PTR):
+        emit_response(out, seen, "PTR", val, fqdn, proto, skip_mdns)
+    for val in field_list(parts, IDX_NS):
+        emit_response(out, seen, "NS", val, fqdn, proto, skip_mdns)
+    for val in field_list(parts, IDX_TXT):
+        emit_response(out, seen, "TXT", val, fqdn, proto, skip_mdns)
+    for val in field_list(parts, IDX_MX):
+        emit_response(out, seen, "MX", val, fqdn, proto, skip_mdns)
+    for val in field_list(parts, IDX_SRV):
+        emit_response(out, seen, "SRV", val, fqdn, proto, skip_mdns)
+    for val in field_list(parts, IDX_SOA):
+        emit_response(out, seen, "SOA", val, fqdn, proto, skip_mdns)
 
-    qnames = field_vals(fields, "dns.qry.name")
-    qtypes = field_vals(fields, "dns.qry.type")
-    default_fqdn = qnames[0] if qnames else first_val(fields, "dns.resp.name")
 
-    response = is_dns_response(fields)
+def process_packet_line(
+    line: str,
+    skip_mdns: bool,
+    ips_out,
+    dns_out,
+    seen_dns: Set[Tuple[str, str, str, str, str]],
+    ips_written: Set[str],
+) -> None:
+    parts = line.rstrip("\n").split("\t")
+    while len(parts) < FIELD_COUNT:
+        parts.append("")
 
-    if not response:
+    for ip in split_field(field_at(parts, IDX_IP_DST)) + split_field(field_at(parts, IDX_IPV6_DST)):
+        if ip and ip != "0.0.0.0" and ip not in ips_written:
+            ips_written.add(ip)
+            ips_out.write(ip + "\n")
+
+    proto = "mdns" if is_mdns_packet(parts) else "unicast"
+    qnames = split_field(field_at(parts, IDX_QRY_NAME))
+    qtypes = split_field(field_at(parts, IDX_QRY_TYPE))
+    resp_names = split_field(field_at(parts, IDX_RESP_NAME))
+    default_fqdn = qnames[0] if qnames else (resp_names[0] if resp_names else "")
+
+    if not is_response_packet(parts):
         for i, name in enumerate(qnames):
             if not name:
                 continue
@@ -381,98 +239,100 @@ def process_dns_packet(
                 qt = 0
             tstr = type_name(qt) if qt else "QUERY"
             key = ("Query", tstr, name, proto)
-            if key in seen:
+            if key in seen_dns:
                 continue
-            seen.add(key)
+            seen_dns.add(key)
             dns_out.write(f"Query,{tstr},{name},{proto}\n")
+        return
 
-    resp_types = field_vals(fields, "dns.resp.type")
-    resp_names = field_vals(fields, "dns.resp.name")
-    queues = build_type_queues(fields)
+    resp_types = split_field(field_at(parts, IDX_RESP_TYPE))
+    queues = build_rdata_queues(parts)
 
-    if response:
-        if resp_types:
-            for idx, t_raw in enumerate(resp_types):
-                try:
-                    tnum = int(t_raw)
-                except ValueError:
-                    continue
-                tstr = type_name(tnum)
-                fqdn = resp_names[idx] if idx < len(resp_names) else default_fqdn
-                val = pop_rdata_for_type(tnum, idx, fields, queues)
-                if not val:
-                    continue
-                _emit_response(dns_out, seen, tstr, val, fqdn, proto, bool(skip_mdns))
-        else:
-            emit_all_rdata_fields(
-                fields, default_fqdn, proto, bool(skip_mdns), dns_out, seen
-            )
-        # Authority / additional RRs and fields not listed in dns.resp.type
-        emit_all_rdata_fields(
-            fields, default_fqdn, proto, bool(skip_mdns), dns_out, seen
-        )
+    if resp_types:
+        for idx, t_raw in enumerate(resp_types):
+            try:
+                tnum = int(t_raw)
+            except ValueError:
+                continue
+            fqdn = resp_names[idx] if idx < len(resp_names) else default_fqdn
+            val = pop_rdata(tnum, idx, parts, queues)
+            if val:
+                emit_response(dns_out, seen_dns, type_name(tnum), val, fqdn, proto, skip_mdns)
+
+    emit_fallback_responses(parts, default_fqdn, proto, skip_mdns, dns_out, seen_dns)
 
 
-def parse_pcap(pcap: str, ips_out, dns_out, skip_mdns: int) -> None:
+def _run_tshark_fields(
+    pcap: str, display_filter: str = None, use_occurrence: bool = True
+) -> Tuple[List[str], str, int]:
     cmd = [
         "tshark",
         "-r",
         pcap,
-        "-Y",
-        "dns || ip || ipv6",
         "-T",
-        "json",
+        "fields",
+        "-E",
+        "header=n",
+        "-E",
+        "separator=\t",
         "-n",
-        "-l",
+        "-q",
     ]
-    proc = subprocess.Popen(
+    if use_occurrence:
+        cmd.extend(["-E", "occurrence=a"])
+    if display_filter:
+        cmd.extend(["-Y", display_filter])
+    for field in TSHARK_FIELDS:
+        cmd.extend(["-e", field])
+
+    proc = subprocess.run(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    return lines, proc.stderr or "", proc.returncode
 
+
+def parse_pcap(pcap: str, ips_out, dns_out, skip_mdns: bool) -> Tuple[int, int, int]:
     seen_dns: Set[Tuple[str, str, str, str, str]] = set()
     ips_written: Set[str] = set()
+    line_count = 0
+    stderr = ""
 
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.strip()
-        if not line or line in ("[", "]"):
-            continue
-        if line.endswith(","):
-            line = line[:-1]
-        try:
-            packet = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        if isinstance(packet, list):
-            items = packet
-        else:
-            items = [packet]
-
-        for item in items:
-            if not isinstance(item, dict):
+    for display_filter in ("ip || ipv6 || dns", None):
+        for use_occurrence in (True, False):
+            lines, stderr, rc = _run_tshark_fields(
+                pcap, display_filter, use_occurrence=use_occurrence
+            )
+            for line in lines:
+                line_count += 1
+                process_packet_line(
+                    line, skip_mdns, ips_out, dns_out, seen_dns, ips_written
+                )
+            if line_count > 0:
+                break
+            if rc != 0 and stderr.strip() and "occurrence" in stderr.lower():
                 continue
-            layers = item.get("_source", {}).get("layers", {})
-            if not layers:
-                continue
+            if line_count > 0 or not use_occurrence:
+                break
+        if line_count > 0:
+            break
 
-            for ip in extract_ips_from_layers(layers):
-                if ip not in ips_written:
-                    ips_written.add(ip)
-                    ips_out.write(ip + "\n")
+    if os.environ.get("GETIPDNS_DEBUG"):
+        print(
+            f"getipdns_parse: {pcap} lines={line_count} ips={len(ips_written)} dns={len(seen_dns)}",
+            file=sys.stderr,
+        )
+        if stderr.strip():
+            print(stderr.strip(), file=sys.stderr)
 
-            dns_fields = collect_dns_fields(layers)
-            if not dns_fields:
-                continue
+    if line_count == 0 and stderr.strip():
+        print(f"getipdns_parse: tshark stderr for {pcap}: {stderr.strip()}", file=sys.stderr)
 
-            process_dns_packet(dns_fields, skip_mdns, dns_out, seen_dns)
-
-    proc.wait()
+    return line_count, len(ips_written), len(seen_dns)
 
 
 def main() -> int:
@@ -484,12 +344,15 @@ def main() -> int:
         return 2
 
     pcap, ips_path, dns_path, skip_mdns_s = sys.argv[1:5]
-    skip_mdns = 1 if skip_mdns_s == "1" else 0
+    skip_mdns = skip_mdns_s == "1"
 
     with open(ips_path, "a", encoding="utf-8") as ips_out, open(
         dns_path, "a", encoding="utf-8"
     ) as dns_out:
-        parse_pcap(pcap, ips_out, dns_out, skip_mdns)
+        lines, ips_n, dns_n = parse_pcap(pcap, ips_out, dns_out, skip_mdns)
+
+    if lines == 0 and ips_n == 0 and dns_n == 0:
+        print(f"getipdns_parse: no data extracted from {pcap}", file=sys.stderr)
 
     return 0
 
